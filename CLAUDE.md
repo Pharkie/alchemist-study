@@ -225,6 +225,11 @@ Slots per universe: bit0=slot1, bit1=slot2, bit2=slot3.
 
 ## Conventions
 
+- **State machine: follow [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).** One
+  transition point (`enterState`), time measured as `now - g_stateMs`, sequences
+  as re-stamped sub-phases, `update`/`render` split, latched inputs + grace
+  timers. This is the standard — don't reintroduce independent timers or
+  instantaneous-input control flow.
 - Keep everything in `src/main.cpp` with the state machine clean and readable.
 - Add brief comments explaining the pin choices and the core-3.x dependency.
 - Non-blocking loop: debounce reeds and button by time, no long `delay()`s that

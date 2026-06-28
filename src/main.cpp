@@ -148,10 +148,12 @@ static constexpr uint32_t REED_DEBOUNCE_MS  = 40;
 static constexpr uint32_t LONG_PRESS_MS     = 600;   // hold = leave a menu / cancel an edit
 static constexpr uint32_t BTN_DEBOUNCE_MS   = 30;
 static constexpr uint32_t RENDER_INTERVAL_MS = 33;   // ~30 fps display cap
-static constexpr uint32_t REVEAL_HOLD_MS     = 3000;  // reveal auto-returns to idle after this
+static constexpr uint32_t REVEAL_ANIM_MS     = 1000; // phase 1: build-up animation (no name yet)
+static constexpr uint32_t REVEAL_NAME_MS     = 3000; // phase 2: hold the potion name, then idle
 static constexpr uint32_t STIR_ACTIVE_MS     = 150;  // fill/drain boundary: moved within this = fill, else drain
 static constexpr float    STIR_DECAY_PER_S   = 0.20f; // bar drains 20%/sec while paused (not a reset)
 static constexpr uint32_t STIR_IDLE_BACK_MS  = 2500; // empty + idle this long -> return to identify
+static constexpr uint32_t REED_GRACE_MS      = 2500; // identify: keep the combo this long after the base empties
 static constexpr float    STIR_ANGLE_STEP   = 0.18f;  // swirl radians per encoder count
 static constexpr uint16_t PITCH_MIN_HZ      = 320;
 static constexpr uint16_t PITCH_MAX_HZ      = 1100;
@@ -169,6 +171,7 @@ static bool g_haveDisplay = false;  // set at boot; if false we run headless
 // ---- Runtime state -----------------------------------------------------
 enum State { ST_IDLE, ST_IDENTIFY, ST_STIRRING, ST_REVEAL, ST_SETTINGS, ST_DIAG };
 static State    g_state    = ST_IDLE;
+static uint32_t g_stateMs  = 0;            // millis() when the current state/phase began
 static uint8_t  g_combo    = 0;            // committed combo (0..7)
 static Universe g_universe = UNI_SKYRIM;
 
@@ -186,14 +189,18 @@ static uint8_t  s_rawComboLast = 0;
 static uint32_t s_comboChangeMs = 0;
 static uint8_t  s_sensedCombo  = 0;     // actual debounced combo (reality)
 static bool     s_baseEmptied  = false; // base cleared since the brew latched
+static uint32_t s_baseEmptyMs  = 0;     // when the base last went physically empty
 
 // encoder / stir model
 static int32_t s_lastEncoder = 0;
 static float   s_stirProgress = 0.0f;      // 0..1 power bar (time-based fill)
 static float   s_swirlAngle   = 0.0f;      // radians, follows the encoder
 static bool    s_stirReady    = false;     // latched once the bar fills
-static uint32_t s_revealMs    = 0;         // when REVEAL began (drives the burst)
 static uint32_t s_lastStirMs  = 0;         // last time the knob actually moved
+
+// reveal sub-phases (timed from g_stateMs; advancing a phase re-stamps it)
+enum RevealPhase { RP_ANIM, RP_NAME };
+static RevealPhase s_revealPhase = RP_ANIM;
 
 // button
 static bool     s_btnDown   = false;
@@ -284,38 +291,53 @@ static uint8_t readRawCombo() {
   return c;
 }
 
+// THE single state-transition point. Records when the (sub)state began so all
+// in-state timing is measured as (now - g_stateMs). See docs/ARCHITECTURE.md.
+static void enterState(State s) {
+  g_state = s;
+  g_stateMs = millis();
+}
+
 // Commit a combo as the effective one: reset the brew and pick a fresh state.
 static void enterCombo(uint8_t c) {
   g_combo = c;
   s_stirProgress = 0.0f;
   s_stirReady = false;
   s_baseEmptied = false;
-  g_state = (c == 0) ? ST_IDLE : ST_IDENTIFY;
+  enterState(c == 0 ? ST_IDLE : ST_IDENTIFY);
   // Print MSB-first (slot3 slot2 slot1) to match the spec's "100 Nightshade".
   Serial.printf("[combo] %u%u%u (val %u) -> %s\n",
                 (c >> 2) & 1, (c >> 1) & 1, (c >> 0) & 1,
                 c, c ? kPotions[g_universe][c] : "idle");
 }
 
-// Decide how to react to a newly-sensed (debounced) combo.
+// React to a newly-sensed (debounced) combo.
 //
-// IDLE/IDENTIFY are live — they always follow the bottles. But once a brew is
-// underway (STIRRING or REVEAL) the combo is LATCHED for reliability: pulling
-// a magnet away — fully or partially, deliberately or by a flaky reed — is
-// ignored, so the swirl and the revealed potion survive. A brew only restarts
-// on a genuinely NEW arrangement: a bottle ADDED to the set, or the base
-// cleared to empty and then refilled.
+// Resilience rule: removing bottles NEVER bails instantly. An empty base is
+// just latched (with a timestamp); a grace timer decides when to fall back to
+// idle, so turning still starts the stir on the cooldown after a magnet leaves.
+//   - IDLE/IDENTIFY: a present bottle updates the combo live (compose before stir).
+//   - STIRRING/REVEAL: combo is fully latched; only a genuinely new arrangement
+//     (a bottle ADDED, or base cleared then refilled) starts a fresh brew.
 static void onSensedComboChange() {
   uint8_t raw = s_sensedCombo;
-  if (g_state == ST_STIRRING || g_state == ST_REVEAL) {
-    if (raw == 0) { s_baseEmptied = true; return; }   // full removal: hold the brew
-    bool addedNew = (raw & ~g_combo) != 0;            // a bottle not in the latched set
-    if (s_baseEmptied || addedNew) enterCombo(raw);   // deliberate new arrangement
-    // else: partial removal of the latched set — ignore it
+
+  if (g_state == ST_SETTINGS || g_state == ST_DIAG) return;  // menus own the screen
+
+  if (raw == 0) {                    // base emptied: latch it; never bail instantly
+    s_baseEmptied = true;
+    s_baseEmptyMs = millis();
     return;
   }
-  if (g_state == ST_SETTINGS || g_state == ST_DIAG) return;  // menu owns the UI
-  enterCombo(raw);
+
+  if (g_state == ST_IDLE || g_state == ST_IDENTIFY) {
+    enterCombo(raw);                 // live: compose the combo before stirring
+    return;
+  }
+
+  // STIRRING / REVEAL: latched — only a new arrangement restarts.
+  bool addedNew = (raw & ~g_combo) != 0;
+  if (s_baseEmptied || addedNew) enterCombo(raw);
 }
 
 // ---- Settings model (reusable mini-menu) -------------------------------
@@ -345,9 +367,9 @@ static void setBright(int v) { g_brightness = (uint8_t)v; prefs.putUChar("bright
 static int  getStirLevel()    { return g_stirLevelIdx; }
 static void setStirLevel(int v){ g_stirLevelIdx = (uint8_t)v; prefs.putUChar("stirlvl", g_stirLevelIdx); }
 
-static void settingsEnter() { g_state = ST_SETTINGS; s_menuIdx = 0; s_navAccum = 0; s_menuEditing = false; }
-static void settingsExit()  { g_state = ST_IDLE;     s_navAccum = 0; s_menuEditing = false; }
-static void diagEnter()     { g_state = ST_DIAG;     s_navAccum = 0; s_menuEditing = false; }
+static void settingsEnter() { s_menuIdx = 0; s_navAccum = 0; s_menuEditing = false; enterState(ST_SETTINGS); }
+static void settingsExit()  { s_navAccum = 0; s_menuEditing = false; enterState(ST_IDLE); }
+static void diagEnter()     { s_navAccum = 0; s_menuEditing = false; enterState(ST_DIAG); }
 
 enum ItemKind { K_CHOICE, K_RANGE, K_INFO, K_ACTION };
 struct MenuItem {
@@ -420,9 +442,9 @@ static void onShortPress(uint32_t now) {
     case ST_STIRRING:
       if (g_combo == 0) break;
       if (s_stirReady) {
-        g_state = ST_REVEAL;
-        s_revealMs = now;
+        s_revealPhase = RP_ANIM;
         s_revealStyle = (int)(esp_random() % 3);   // pick a random reveal animation
+        enterState(ST_REVEAL);                     // stamps the phase clock
         startMelody(MEL_SUCCESS, NUM_NOTES(MEL_SUCCESS), now);
         Serial.printf("[reveal] %s\n", kPotions[g_universe][g_combo]);
       } else {
@@ -471,11 +493,20 @@ static void updateStir(uint32_t now, uint32_t dt, int32_t d) {
   // Stir only matters in identify/stirring (loop dispatches the delta by state).
   if (g_state != ST_IDENTIFY && g_state != ST_STIRRING) return;
 
+  // Identify resilience: if the base is physically empty we keep showing the
+  // combo (so turning still starts the stir) until a grace period lapses; only
+  // then fall back to idle. This is the cooldown after a magnet is removed.
+  if (g_state == ST_IDENTIFY && s_sensedCombo == 0 &&
+      (uint32_t)(now - s_baseEmptyMs) >= REED_GRACE_MS) {
+    enterCombo(0);   // -> idle
+    return;
+  }
+
   // Any knob motion = actively stirring; it also spins the swirl.
   if (d != 0) {
     s_lastStirMs = now;
     s_swirlAngle += STIR_ANGLE_STEP * (float)d;
-    if (g_state == ST_IDENTIFY) g_state = ST_STIRRING;
+    if (g_state == ST_IDENTIFY) enterState(ST_STIRRING);
   }
 
   if (s_stirReady) return;          // armed: hold the full bar until press/combo change
@@ -498,7 +529,7 @@ static void updateStir(uint32_t now, uint32_t dt, int32_t d) {
     // Once fully drained and idle a while, drift back to the ingredient screen.
     if (s_stirProgress <= 0.0f && idle >= STIR_IDLE_BACK_MS) {
       if (s_sensedCombo != g_combo) enterCombo(s_sensedCombo);
-      else g_state = ST_IDENTIFY;
+      else enterState(ST_IDENTIFY);
     }
   }
 }
@@ -730,11 +761,11 @@ static void drawPotionName(const char* name) {
 }
 
 // --- Reveal animations: three styles, picked at random per brew ----------
-// Each plays for ~0.9 s BEFORE the name appears, so it reads as a build-up.
+// `el` is time elapsed in the ANIM phase; each animation spans REVEAL_ANIM_MS.
 //
 // Style 0: a dense sparkle starburst exploding outward (elliptical).
-static void animStarburst(uint32_t since) {
-  float p = (float)since / 900.0f;
+static void animStarburst(uint32_t el) {
+  float p = (float)el / (float)REVEAL_ANIM_MS;
   if (p > 1.0f) p = 1.0f;
   for (int i = 0; i < 18; i++) {
     float a = i * 0.349f + p * 1.4f;
@@ -747,12 +778,12 @@ static void animStarburst(uint32_t since) {
 }
 
 // Style 1: a brew surge — bubbles rise from the bottom and grow as they climb.
-static void animBubbles(uint32_t since) {
+static void animBubbles(uint32_t el) {
+  float gp = (float)el / (float)REVEAL_ANIM_MS;   // 0..1 across the phase
   for (int i = 0; i < 12; i++) {
-    int t = (int)since - i * 30;
-    if (t < 0 || t > 820) continue;
-    float f = (float)t / 820.0f;
-    int x = 9 + i * 10 + (int)lroundf(3.0f * sinf((float)t * 0.025f));
+    float f = gp * 1.3f - i * 0.06f;              // staggered rise
+    if (f < 0.0f || f > 1.0f) continue;
+    int x = 9 + i * 10 + (int)lroundf(3.0f * sinf(f * 12.0f));
     int y = 57 - (int)lroundf(f * 52.0f);
     int r = 1 + (int)lroundf(f * 3.0f);
     if (y > 4 && x > 5 && x < 123) oled.drawCircle(x, y, r);
@@ -760,11 +791,12 @@ static void animBubbles(uint32_t since) {
 }
 
 // Style 2: magic pulse — bold concentric rings expand outward from the centre.
-static void animRings(uint32_t since) {
+static void animRings(uint32_t el) {
+  float k2r = 66.0f / (float)REVEAL_ANIM_MS;
   for (int k = 0; k < 4; k++) {
-    int t = (int)since - k * 150;
+    int t = (int)el - k * 180;
     if (t < 0) continue;
-    int rad = (int)((float)t * 0.075f);
+    int rad = (int)((float)t * k2r);
     if (rad > 2 && rad < 64) {
       oled.drawCircle(64, 33, rad);
       if (rad < 63) oled.drawCircle(64, 33, rad + 1);   // doubled for visibility
@@ -772,29 +804,34 @@ static void animRings(uint32_t since) {
   }
 }
 
+// Advance the reveal sequence: ANIM phase -> NAME phase -> idle. Each phase is
+// timed from when IT began (g_stateMs), so durations compose, not race.
+static void updateReveal(uint32_t now) {
+  uint32_t el = now - g_stateMs;
+  if (s_revealPhase == RP_ANIM) {
+    if (el >= REVEAL_ANIM_MS) { s_revealPhase = RP_NAME; g_stateMs = now; }
+  } else {  // RP_NAME
+    if (el >= REVEAL_NAME_MS) enterCombo(0);   // hold elapsed -> back to idle
+  }
+}
+
 static void renderReveal(uint32_t now) {
   oled.clearBuffer();
   drawFancyFrame();
+  uint32_t el = now - g_stateMs;
 
-  uint32_t since = now - s_revealMs;
-  const uint32_t ANIM_MS = 1200;
-
-  if (since < ANIM_MS) {
+  if (s_revealPhase == RP_ANIM) {
+    // Phase 1: pure build-up animation, no name yet.
     switch (s_revealStyle) {
-      case 1:  animBubbles(since);   break;
-      case 2:  animRings(since);     break;
-      default: animStarburst(since); break;
+      case 1:  animBubbles(el);   break;
+      case 2:  animRings(el);     break;
+      default: animStarburst(el); break;
     }
   } else {
-    int r = ((now / 250) & 1) ? 1 : 0;      // settled: gentle corner twinkles
+    // Phase 2: the named potion, with gentle corner twinkles.
+    int r = ((now / 250) & 1) ? 1 : 0;
     drawSparkle(11, 11, r); drawSparkle(117, 11, r);
     drawSparkle(11, 53, r); drawSparkle(117, 53, r);
-  }
-
-  // The name appears only AFTER the build-up animation has played (~0.9 s),
-  // so the animation reads as a distinct pre-reveal flourish.
-  const uint32_t nameAt = 900;
-  if (since >= nameAt) {
     oled.drawHLine(44, 15, 40);
     drawDiamond(40, 15);
     drawDiamond(88, 15);
@@ -1000,22 +1037,12 @@ void loop() {
     case ST_IDENTIFY:
     case ST_STIRRING: updateStir(now, dt, d);     break;
     case ST_SETTINGS: if (d) updateMenuNav(d);    break;
-    default:          break;  // IDLE / REVEAL / DIAG: encoder not navigated
+    case ST_REVEAL:   updateReveal(now);          break;  // ANIM -> NAME -> idle
+    default:          break;  // IDLE / DIAG: encoder not navigated
   }
 
   updateButton(now);
   updateAudio(now);
-
-  // After the reveal has been up a few seconds, drift back to the idle
-  // "Place ingredients" screen (ready for the next brew). Bottles left on the
-  // base just sit on idle until they're changed.
-  if (g_state == ST_REVEAL && (now - s_revealMs) >= REVEAL_HOLD_MS) {
-    g_combo = 0;
-    s_stirProgress = 0.0f;
-    s_stirReady = false;
-    s_baseEmptied = false;
-    g_state = ST_IDLE;
-  }
 
   if (now - s_lastRenderMs >= RENDER_INTERVAL_MS) {
     s_lastRenderMs = now;
