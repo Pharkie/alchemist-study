@@ -93,8 +93,13 @@ States: **IDLE → IDENTIFY → STIRRING → REVEAL**
 
 ### Interaction rules
 
-- **Combo change** at any time → drop back to IDENTIFY (and, from REVEAL,
-  combo change is the *only* thing that dismisses the reveal).
+- **Combo latching (reliability):** IDLE and IDENTIFY follow the bottles live.
+  But once a brew is underway (STIRRING or REVEAL) the combo is **latched** —
+  pulling a magnet away (fully or partially, deliberately or via a flaky reed)
+  is **ignored**, so the swirl and the revealed potion survive. A brew only
+  restarts on a genuinely new arrangement: a bottle **added** to the set, or the
+  base cleared to **empty and then refilled**. When a stir fizzles out (knob
+  idle) it resyncs to whatever is actually on the base.
 - **Short press** = mix & reveal — but **stirring is REQUIRED first**: a press
   before enough stir progress is accumulated does nothing meaningful (no reveal).
 - **Long press (≥600 ms)** = toggle universe (Skyrim ↔ BG3), distinct two-note

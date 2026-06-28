@@ -125,15 +125,18 @@ static State    g_state    = ST_IDLE;
 static uint8_t  g_combo    = 0;            // committed combo (0..7)
 static Universe g_universe = UNI_SKYRIM;
 
-// reed debounce
+// reed debounce / latch
 static uint8_t  s_rawComboLast = 0;
 static uint32_t s_comboChangeMs = 0;
+static uint8_t  s_sensedCombo  = 0;     // actual debounced combo (reality)
+static bool     s_baseEmptied  = false; // base cleared since the brew latched
 
 // encoder / stir model
 static int32_t s_lastEncoder = 0;
 static float   s_stirProgress = 0.0f;      // 0..1, decays when idle
 static float   s_swirlAngle   = 0.0f;      // radians, follows the encoder
 static bool    s_stirReady    = false;     // latched once progress crosses level
+static uint32_t s_revealMs    = 0;         // when REVEAL began (drives the burst)
 
 // button
 static bool     s_btnDown   = false;
@@ -219,17 +222,37 @@ static uint8_t readRawCombo() {
   return c;
 }
 
-// A new combo was committed (debounced). Resets the brew and picks a state.
-// This is also the ONLY thing that dismisses a REVEAL.
-static void onComboChanged(uint8_t newCombo) {
-  g_combo = newCombo;
+// Commit a combo as the effective one: reset the brew and pick a fresh state.
+static void enterCombo(uint8_t c) {
+  g_combo = c;
   s_stirProgress = 0.0f;
   s_stirReady = false;
-  g_state = (newCombo == 0) ? ST_IDLE : ST_IDENTIFY;
+  s_baseEmptied = false;
+  g_state = (c == 0) ? ST_IDLE : ST_IDENTIFY;
   // Print MSB-first (slot3 slot2 slot1) to match the spec's "100 Nightshade".
   Serial.printf("[combo] %u%u%u (val %u) -> %s\n",
-                (newCombo >> 2) & 1, (newCombo >> 1) & 1, (newCombo >> 0) & 1,
-                newCombo, newCombo ? kPotions[g_universe][newCombo] : "idle");
+                (c >> 2) & 1, (c >> 1) & 1, (c >> 0) & 1,
+                c, c ? kPotions[g_universe][c] : "idle");
+}
+
+// Decide how to react to a newly-sensed (debounced) combo.
+//
+// IDLE/IDENTIFY are live — they always follow the bottles. But once a brew is
+// underway (STIRRING or REVEAL) the combo is LATCHED for reliability: pulling
+// a magnet away — fully or partially, deliberately or by a flaky reed — is
+// ignored, so the swirl and the revealed potion survive. A brew only restarts
+// on a genuinely NEW arrangement: a bottle ADDED to the set, or the base
+// cleared to empty and then refilled.
+static void onSensedComboChange() {
+  uint8_t raw = s_sensedCombo;
+  if (g_state == ST_STIRRING || g_state == ST_REVEAL) {
+    if (raw == 0) { s_baseEmptied = true; return; }   // full removal: hold the brew
+    bool addedNew = (raw & ~g_combo) != 0;            // a bottle not in the latched set
+    if (s_baseEmptied || addedNew) enterCombo(raw);   // deliberate new arrangement
+    // else: partial removal of the latched set — ignore it
+    return;
+  }
+  enterCombo(raw);
 }
 
 static void onShortPress(uint32_t now) {
@@ -237,6 +260,7 @@ static void onShortPress(uint32_t now) {
   if (g_combo == 0) return;                // nothing to brew
   if (s_stirReady) {
     g_state = ST_REVEAL;
+    s_revealMs = now;
     startMelody(MEL_SUCCESS, NUM_NOTES(MEL_SUCCESS), now);
     Serial.printf("[reveal] %s\n", kPotions[g_universe][g_combo]);
   } else {
@@ -291,128 +315,269 @@ static void updateStir(uint32_t now, uint32_t dt) {
 
   if (s_stirProgress >= STIR_READY_LEVEL) s_stirReady = true;
 
-  // Settle back to identify once the brew goes quiet.
+  // Settle back to identify once the brew goes quiet. The brew was latched
+  // while stirring, so resync to whatever is actually on the base now (an
+  // emptied base drops to idle; bottles still present stay in identify).
   if (g_state == ST_STIRRING && d == 0 && s_stirProgress <= 0.02f) {
-    g_state = ST_IDENTIFY;
+    if (s_sensedCombo != g_combo) enterCombo(s_sensedCombo);
+    else g_state = ST_IDENTIFY;
   }
 }
 
 // ---- Rendering ---------------------------------------------------------
-static void drawCentered(const char* s, int y) {  // font must be set first
-  int w = oled.getStrWidth(s);
-  oled.drawStr((128 - w) / 2, y, s);
+// Aesthetic: alchemical / celestial. Elegant serif type (New Century
+// Schoolbook), ornamental frames with corner flourishes, twinkling stars,
+// a swirling vortex, and a sparkle-burst reveal. All on 1 bit, 128x64.
+
+static void drawCenteredF(const char* s, int y) {  // font must be set first
+  oled.drawStr((128 - oled.getStrWidth(s)) / 2, y, s);
 }
 
-static void renderIdle() {
+// A 4-point sparkle / star of radius r (0..3).
+static void drawSparkle(int x, int y, int r) {
+  oled.drawPixel(x, y);
+  for (int i = 1; i <= r; i++) {
+    oled.drawPixel(x + i, y); oled.drawPixel(x - i, y);
+    oled.drawPixel(x, y + i); oled.drawPixel(x, y - i);
+  }
+}
+
+// A small filled diamond (ornament).
+static void drawDiamond(int x, int y) {
+  oled.drawHLine(x - 1, y, 3);
+  oled.drawPixel(x, y - 1);
+  oled.drawPixel(x, y + 1);
+}
+
+// Double border with corner diamonds — an illuminated-manuscript frame.
+static void drawFancyFrame() {
+  oled.drawFrame(0, 0, 128, 64);
+  oled.drawFrame(3, 3, 122, 58);
+  drawDiamond(3, 3); drawDiamond(124, 3);
+  drawDiamond(3, 60); drawDiamond(124, 60);
+}
+
+// Crescent moon: a ring with a bite taken out of it.
+static void drawMoon(int x, int y, int rad) {
+  oled.drawCircle(x, y, rad);
+  oled.setDrawColor(0);
+  oled.drawDisc(x + (rad + 1) / 2, y - (rad + 1) / 3, rad);
+  oled.setDrawColor(1);
+}
+
+// Fixed constellation that twinkles via per-star phase (kept off-centre).
+struct Star { int8_t x, y, phase; };
+static const Star kStars[] = {
+  {12, 11, 0}, {116, 13, 3}, {10, 44, 6}, {119, 46, 2}, {30, 56, 5}, {99, 55, 1}
+};
+static void drawTwinkles(uint32_t now) {
+  for (auto& s : kStars) {
+    int ph = (int)((now / 110 + s.phase * 5) % 16);
+    int tri = ph < 8 ? ph : 15 - ph;       // 0..7..0
+    drawSparkle(s.x, s.y, tri / 3);        // radius 0..2
+  }
+}
+
+// A "Press to brew" call-to-action as a glowing rounded pill with sparkles.
+static void drawBrewPill(int y) {
+  const char* t = "Press to brew";
+  oled.setFont(u8g2_font_helvR08_tr);
+  int w = oled.getStrWidth(t);
+  int bx = (128 - w) / 2 - 6;
+  oled.drawRBox(bx, y, w + 12, 11, 3);
+  oled.setDrawColor(0);
+  oled.drawStr((128 - w) / 2, y + 8, t);
+  oled.setDrawColor(1);
+  drawSparkle(bx - 4, y + 5, 1);
+  drawSparkle(bx + w + 15, y + 5, 1);
+}
+
+static void renderIdle(uint32_t now) {
   oled.clearBuffer();
-  oled.setFont(u8g2_font_6x12_tr);
-  drawCentered("Place ingredients", 26);
-  oled.setFont(u8g2_font_5x8_tr);
-  drawCentered("Hold knob: switch realm", 44);
-  drawCentered(kUniverseName[g_universe], 60);
+  drawTwinkles(now);
+  drawMoon(15, 15, 6);
+
+  oled.setFont(u8g2_font_ncenB12_tr);
+  drawCenteredF("Place the", 28);
+  drawCenteredF("ingredients", 44);
+
+  // Divider with diamond end-caps.
+  oled.drawHLine(28, 51, 72);
+  drawDiamond(22, 51); drawDiamond(106, 51);
+
+  // Bottom caption gently alternates the realm and the hidden gesture.
+  oled.setFont(u8g2_font_helvR08_tr);
+  bool hint = ((now / 2600) & 1);
+  drawCenteredF(hint ? "hold knob - change realm" : kUniverseName[g_universe], 61);
   oled.sendBuffer();
 }
 
-static void renderIdentify() {
+static void renderIdentify(uint32_t now) {
   oled.clearBuffer();
 
-  // Top: current realm.
-  oled.setFont(u8g2_font_5x8_tr);
-  oled.drawStr(0, 7, kUniverseName[g_universe]);
+  // Inverted header bar with the realm name.
+  oled.drawBox(0, 0, 128, 13);
+  oled.setDrawColor(0);
+  oled.setFont(u8g2_font_helvB08_tr);
+  oled.drawStr(5, 10, kUniverseName[g_universe]);
+  oled.setDrawColor(1);
 
-  // Ingredient list. Pick a font that keeps the widest present name on-screen.
-  oled.setFont(u8g2_font_6x10_tr);
-  bool fits = true;
+  // Ingredient list with diamond bullets, vertically centred for the count.
+  int count = 0;
+  for (int s = 0; s < 3; s++) if (g_combo & (1 << s)) count++;
+  oled.setFont(u8g2_font_helvR08_tr);
+  int y = (count <= 1) ? 35 : (count == 2 ? 30 : 26);
   for (int slot = 0; slot < 3; slot++) {
     if (g_combo & (1 << slot)) {
-      if (oled.getStrWidth(kIngredients[g_universe][slot]) > 126) fits = false;
-    }
-  }
-  if (!fits) oled.setFont(u8g2_font_5x8_tr);
-
-  int y = 24;
-  for (int slot = 0; slot < 3; slot++) {
-    if (g_combo & (1 << slot)) {
-      oled.drawStr(2, y, kIngredients[g_universe][slot]);
-      y += 13;
+      drawDiamond(8, y - 3);
+      oled.drawStr(15, y, kIngredients[g_universe][slot]);
+      y += 12;
     }
   }
 
-  // Prompt reflects whether a brew is armed.
-  oled.setFont(u8g2_font_5x8_tr);
-  drawCentered(s_stirReady ? "Press to brew!" : "Turn to stir", 62);
+  if (s_stirReady) {
+    drawBrewPill(53);
+  } else {
+    oled.setFont(u8g2_font_helvR08_tr);
+    char p[20] = "Turn to stir";
+    int dots = (int)((now / 400) % 4);
+    for (int i = 0; i < dots; i++) strcat(p, ".");
+    drawCenteredF(p, 61);
+  }
   oled.sendBuffer();
 }
 
-static void renderStirring() {
+static void renderStirring(uint32_t now) {
   oled.clearBuffer();
+  const int cx = 64, cy = 31;
+  const int Rout = 22;
 
-  const int cx = 64, cy = 34, R = 20;
+  oled.setFont(u8g2_font_helvR08_tr);
+  drawCenteredF("- brewing -", 8);
 
-  // Ring of dim (single-pixel) dots.
-  const int N = 12;
+  // Faint outer ring of stationary dots.
+  const int N = 16;
   for (int i = 0; i < N; i++) {
     float a = (float)i * (2.0f * (float)M_PI / N);
-    oled.drawPixel(cx + (int)lroundf(R * cosf(a)),
-                   cy + (int)lroundf(R * sinf(a)));
+    oled.drawPixel(cx + (int)lroundf(Rout * cosf(a)), cy + (int)lroundf(Rout * sinf(a)));
   }
 
-  // One bright orbiting dot whose position follows the encoder and whose
-  // size grows with stir progress.
-  int bx = cx + (int)lroundf(R * cosf(s_swirlAngle));
-  int by = cy + (int)lroundf(R * sinf(s_swirlAngle));
-  int r = 2 + (int)lroundf(s_stirProgress * 2.0f);
-  oled.drawDisc(bx, by, r);
+  // Twin spiral arms swirling with the knob; reach grows with progress.
+  float reach = 14.0f + s_stirProgress * 6.0f;
+  for (int arm = 0; arm < 2; arm++) {
+    float base = s_swirlAngle + arm * (float)M_PI;
+    for (float t = 0.0f; t < 3.0f; t += 0.22f) {
+      float r = 3.0f + (t / 3.0f) * reach;
+      float a = base + t * 1.7f;
+      oled.drawPixel(cx + (int)lroundf(r * cosf(a)), cy + (int)lroundf(r * sinf(a)));
+    }
+  }
 
-  oled.setFont(u8g2_font_5x8_tr);
-  drawCentered("Stirring", 8);
-  drawCentered(s_stirReady ? "Press to brew!" : "keep stirring", 62);
+  // Lead mote with a fading comet tail, orbiting the outer ring.
+  for (int k = 0; k < 4; k++) {
+    float a = s_swirlAngle - k * 0.34f;
+    int x = cx + (int)lroundf(Rout * cosf(a));
+    int yy = cy + (int)lroundf(Rout * sinf(a));
+    if (k == 0)      oled.drawDisc(x, yy, 2 + (int)lroundf(s_stirProgress * 2.0f));
+    else if (k < 2)  oled.drawDisc(x, yy, 1);
+    else             oled.drawPixel(x, yy);
+  }
+
+  // Progress arc sweeping clockwise from the top.
+  const int Rarc = 27;
+  int seg = (int)(s_stirProgress * 46.0f);
+  for (int i = 0; i < seg; i++) {
+    float a = -(float)M_PI / 2.0f + (float)i * (2.0f * (float)M_PI / 46.0f);
+    oled.drawPixel(cx + (int)lroundf(Rarc * cosf(a)), cy + (int)lroundf(Rarc * sinf(a)));
+  }
+
+  // When ready: sparkles flare around the rim + the brew pill.
+  if (s_stirReady) {
+    for (int i = 0; i < 3; i++) {
+      float a = s_swirlAngle * 0.5f + i * 2.094f;
+      int x = cx + (int)lroundf((Rout + 4) * cosf(a));
+      int yy = cy + (int)lroundf((Rout + 4) * sinf(a));
+      drawSparkle(x, yy, ((now / 150 + i) & 1) ? 1 : 2);
+    }
+    drawBrewPill(53);
+  } else {
+    oled.setFont(u8g2_font_helvR08_tr);
+    drawCenteredF("keep stirring", 61);
+  }
   oled.sendBuffer();
 }
 
-// Potion name, centered, wrapped to a second line if wider than the panel.
+// Potion name in an elegant serif, scaled to the largest size that fits the
+// cartouche on one or two lines (falls back through smaller faces).
 static void drawPotionName(const char* name) {
-  oled.setFont(u8g2_font_6x13B_tr);
-  if (oled.getStrWidth(name) <= 126) {
-    drawCentered(name, 40);
-    return;
-  }
-  char buf[48];
-  strncpy(buf, name, sizeof(buf) - 1);
-  buf[sizeof(buf) - 1] = '\0';
+  const uint8_t* fonts[] = {
+    u8g2_font_ncenB14_tr, u8g2_font_ncenB12_tr, u8g2_font_ncenB10_tr
+  };
+  const int budget = 112;
+  for (int f = 0; f < 3; f++) {
+    oled.setFont(fonts[f]);
+    if (oled.getStrWidth(name) <= budget) { drawCenteredF(name, 39); return; }
 
-  char line1[48] = "";
-  char line2[48] = "";
-  for (char* tok = strtok(buf, " "); tok != nullptr; tok = strtok(nullptr, " ")) {
-    if (line2[0] == '\0') {
-      char trial[48];
-      strcpy(trial, line1);
-      if (line1[0]) strcat(trial, " ");
-      strcat(trial, tok);
-      if (oled.getStrWidth(trial) <= 126) { strcpy(line1, trial); continue; }
+    char buf[48];
+    strncpy(buf, name, sizeof(buf) - 1);
+    buf[sizeof(buf) - 1] = '\0';
+    char l1[48] = "", l2[48] = "";
+    for (char* tok = strtok(buf, " "); tok; tok = strtok(nullptr, " ")) {
+      if (l2[0] == '\0') {
+        char trial[48];
+        strcpy(trial, l1);
+        if (l1[0]) strcat(trial, " ");
+        strcat(trial, tok);
+        if (oled.getStrWidth(trial) <= budget) { strcpy(l1, trial); continue; }
+      }
+      if (l2[0]) strcat(l2, " ");
+      strcat(l2, tok);
     }
-    if (line2[0]) strcat(line2, " ");
-    strcat(line2, tok);
+    bool ok = oled.getStrWidth(l1) <= budget && oled.getStrWidth(l2) <= budget;
+    if (ok || f == 2) { drawCenteredF(l1, 32); drawCenteredF(l2, 47); return; }
   }
-  drawCentered(line1, 30);
-  drawCentered(line2, 46);
 }
 
-static void renderReveal() {
+static void renderReveal(uint32_t now) {
   oled.clearBuffer();
-  oled.setFont(u8g2_font_5x8_tr);
-  drawCentered(kUniverseName[g_universe], 8);
+  drawFancyFrame();
+
+  uint32_t since = now - s_revealMs;
+
+  // Opening flourish: a ring of sparkles bursting outward, fading over ~1.1s.
+  if (since < 1100) {
+    float p = (float)since / 1100.0f;
+    for (int i = 0; i < 10; i++) {
+      float a = i * 0.6283f + p * 1.5f;
+      float rad = 6.0f + p * 52.0f;
+      int x = 64 + (int)lroundf(rad * cosf(a));
+      int y = 33 + (int)lroundf(rad * sinf(a) * 0.5f);
+      int r = 2 - (int)(p * 2.0f);
+      if (x > 5 && x < 123 && y > 5 && y < 59) drawSparkle(x, y, r < 0 ? 0 : r);
+    }
+  } else {
+    // Settled: gentle twinkles in the corners.
+    int r = ((now / 250) & 1) ? 1 : 0;
+    drawSparkle(11, 11, r); drawSparkle(117, 11, r);
+    drawSparkle(11, 53, r); drawSparkle(117, 53, r);
+  }
+
+  // Realm caption at the top, then the potion name.
+  oled.setFont(u8g2_font_helvR08_tr);
+  drawCenteredF(kUniverseName[g_universe], 14);
+  oled.drawHLine(34, 17, 60);
   drawPotionName(kPotions[g_universe][g_combo]);
   oled.sendBuffer();
 }
 
 static void render() {
   if (!g_haveDisplay) return;  // headless: skip drawing if no panel on the bus
+  uint32_t now = millis();
   switch (g_state) {
-    case ST_IDLE:     renderIdle();     break;
-    case ST_IDENTIFY: renderIdentify(); break;
-    case ST_STIRRING: renderStirring(); break;
-    case ST_REVEAL:   renderReveal();   break;
+    case ST_IDLE:     renderIdle(now);     break;
+    case ST_IDENTIFY: renderIdentify(now); break;
+    case ST_STIRRING: renderStirring(now); break;
+    case ST_REVEAL:   renderReveal(now);   break;
   }
 }
 
@@ -499,8 +664,9 @@ void loop() {
     s_rawComboLast = raw;
     s_comboChangeMs = now;
   }
-  if (raw != g_combo && (now - s_comboChangeMs) >= REED_DEBOUNCE_MS) {
-    onComboChanged(raw);
+  if (raw != s_sensedCombo && (now - s_comboChangeMs) >= REED_DEBOUNCE_MS) {
+    s_sensedCombo = raw;          // reality, debounced
+    onSensedComboChange();        // honor or latch, depending on state
   }
 
   updateButton(now);
