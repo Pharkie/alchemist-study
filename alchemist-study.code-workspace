@@ -1,0 +1,19 @@
+{
+    "folders": [
+        {
+            "path": "."
+        }
+    ],
+    "settings": {
+        "platformio-ide.autoOpenPlatformIOIniFile": false,
+        "files.associations": {
+            "*.h": "cpp"
+        }
+    },
+    "extensions": {
+        "recommendations": [
+            "platformio.platformio-ide",
+            "ms-vscode.cpptools"
+        ]
+    }
+}

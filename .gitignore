@@ -1,0 +1,35 @@
+# PlatformIO
+.pio/
+compile_commands.json
+
+# clangd index
+.cache/
+
+# Secrets (copy secrets.h.example -> secrets.h)
+src/config/secrets.h
+!src/config/secrets.h.example
+
+# Build artifacts
+*.bin
+*.elf
+*.map
+firmware/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/c_cpp_properties.json
+.vscode/launch.json
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Backups / temp
+*~
+*.bak
+*.tmp

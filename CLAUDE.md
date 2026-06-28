@@ -1,0 +1,136 @@
+# CLAUDE.md — Alchemist Study
+
+Firmware for the **ESP32-C3 Super Mini** that powers a 3D-printed alchemist's-study
+model. Reed switches sense which potion bottles are seated in fixed homes; an OLED
+names the resulting potion in one of two game universes (Skyrim / Baldur's Gate 3).
+A rotary encoder is the "stirring" control and a passive buzzer provides audio.
+
+**Build order:** the bench firmware (potion logic) is built **WiFi-free first**, so
+it's a clean one-shot deliverable that works without anyone entering credentials.
+**Connectivity is a deliberate later stage** (see backlog) — OTA reflashing of the
+potion tables, a tiny status page, and Home Assistant integration (e.g. announce
+"Philter of the Phantom brewed" as an HA event / trigger a scene).
+
+WiFi capability is **not removed** — the radio is the C3's whole point over an
+ATmega, and the WiFi library is built into the core (free, on pioarduino too). What
+gets deleted is the *template's WiFi implementation*, not the capability. Nothing in
+the bench firmware should architect WiFi out (it won't — the pin map doesn't clash).
+
+## Build / flash / monitor
+
+```sh
+pio run                       # build default env (c3-prod)
+pio run -e c3-dev -t upload   # flash dev build (verbose logs)
+pio device monitor -b 115200  # serial monitor over USB-CDC
+```
+
+USB-CDC serial is enabled (`ARDUINO_USB_MODE=1`, `ARDUINO_USB_CDC_ON_BOOT=1`),
+so the board enumerates as a serial port over its native USB.
+
+## Platform — IMPORTANT
+
+Target **arduino-esp32 3.x** via the **pioarduino** platform fork, pinned to a
+specific release:
+
+```ini
+platform = https://github.com/pioarduino/platform-espressif32/releases/download/55.03.39/platform-espressif32.zip
+```
+
+(`55.03.39` = arduino-esp32 core 3.3.9 / ESP-IDF 5.5.4.)
+
+Why not the stock `espressif32@6.x` platform? That's the *official* platform but it's
+stuck on arduino-esp32 **2.x**, where `tone()`/`noTone()` and the `ESP32Encoder`
+pull-resistor API behave differently. The platform move is required for the buzzer
+API regardless of WiFi — pioarduino 3.x gives us `tone()` **and** WiFi. Do not
+silently bump this pin.
+
+## Hardware & pin map (ESP32-C3 Super Mini, native USB)
+
+| Function                 | GPIO  | Notes                                              |
+|--------------------------|-------|----------------------------------------------------|
+| Reed slot 1 (bit0)       | 3     | `INPUT_PULLUP`; magnet pulls LOW = present         |
+| Reed slot 2 (bit1)       | 4     | `INPUT_PULLUP`                                      |
+| Reed slot 3 (bit2)       | 10    | `INPUT_PULLUP`                                      |
+| OLED SDA (I²C)           | 5     | SSD1306 128×64, white                              |
+| OLED SCL (I²C)           | 6     |                                                    |
+| Buzzer (passive)         | 1     | `tone()` / `noTone()`                              |
+| Encoder A                | 0     | Safe on C3 — GPIO0 is NOT a strapping pin here     |
+| Encoder B                | 7     |                                                    |
+| Encoder SW (push)        | 20    | `INPUT_PULLUP`                                      |
+
+**Combo bit mapping:** `bit0=slot1, bit1=slot2, bit2=slot3` → combo value `1..7`
+(`0` = empty base = idle).
+
+## Libraries
+
+- **U8g2** (`olikraus/U8g2@^2.36.18`) — display, full-buffer:
+  `U8G2_SSD1306_128X64_NONAME_F_HW_I2C`.
+- **Preferences** — built into the core; used for NVS persistence of the universe.
+
+### Encoder — no library (important)
+
+`madhephaestus/ESP32Encoder` does **NOT** work on the ESP32-C3: it relies on the
+PCNT pulse-counter peripheral, which the C3 lacks (S2/S3/C6 and classic ESP32 have
+it; C3/C2 don't). The library even emits `#warning PCNT not supported on this SoC`
+and fails to link. So the encoder is decoded in software with a tiny GPIO-interrupt
+quadrature routine in `main.cpp` (both channels on `CHANGE`, a 16-entry transition
+table → ±1, internal pullups). `g_encoderCount` is the running signed position.
+
+## Architecture — single `src/main.cpp`, clean state machine
+
+States: **IDLE → IDENTIFY → STIRRING → REVEAL**
+
+- **IDLE** — empty base. Shows "Place ingredients" + hint that holding the switch
+  toggles realm.
+- **IDENTIFY** — ≥1 bottle seated. Lists present ingredient name(s), prompts
+  "turn to stir".
+- **STIRRING** — encoder is turning. Brewing trill rises with stir progress
+  (~320 Hz → ~1100 Hz); OLED swirl animation (ring of dim dots, one bright dot
+  orbiting, angle follows the encoder). Pitch + swirl decay when the knob goes
+  still, then settle back to IDENTIFY.
+- **REVEAL** — shows the resulting potion name (wrap to two lines if wider than
+  128px) with a short ascending success jingle.
+
+### Interaction rules
+
+- **Combo change** at any time → drop back to IDENTIFY (and, from REVEAL,
+  combo change is the *only* thing that dismisses the reveal).
+- **Short press** = mix & reveal — but **stirring is REQUIRED first**: a press
+  before enough stir progress is accumulated does nothing meaningful (no reveal).
+- **Long press (≥600 ms)** = toggle universe (Skyrim ↔ BG3), distinct two-note
+  beep. Persist choice to NVS so it survives reboot.
+
+## Potion lookup — index by combo `1..7` (`0` = idle)
+
+Slots per universe: bit0=slot1, bit1=slot2, bit2=slot3.
+
+**Skyrim** — Blue Mountain Flower / Deathbell / Nightshade
+
+| Combo | Ingredients              | Potion                       |
+|-------|--------------------------|------------------------------|
+| 001   | Flower                   | Potion of Minor Healing      |
+| 010   | Deathbell                | Damage Health Poison         |
+| 100   | Nightshade               | Fortify Destruction          |
+| 011   | Flower + Deathbell       | Lingering Damage Poison      |
+| 101   | Flower + Nightshade      | Potion of Regeneration       |
+| 110   | Deathbell + Nightshade   | Deadly Paralysis Poison      |
+| 111   | all                      | Philter of the Phantom       |
+
+**Baldur's Gate 3** — Salts of Mugwort / Bullywug Crayfish Tail / Rogue's Morsel
+
+| Combo | Ingredients              | Potion                          |
+|-------|--------------------------|---------------------------------|
+| 001   | Mugwort                  | Potion of Healing               |
+| 010   | Crayfish                 | Elixir of Vigilance             |
+| 100   | Morsel                   | Potion of Speed                 |
+| 011   | Mugwort + Crayfish       | Elixir of the Colossus          |
+| 101   | Mugwort + Morsel         | Potion of Invisibility          |
+| 110   | Crayfish + Morsel        | Elixir of Heroism               |
+| 111   | all                      | Elixir of Universal Resistance  |
+
+## Conventions
+
+- Keep everything in `src/main.cpp` with the state machine clean and readable.
+- Add brief comments explaining the pin choices and the core-3.x dependency.
+- Non-blocking loop: debounce reeds and button by time, no long `delay()`s that
+  would stall stir audio/animation.
