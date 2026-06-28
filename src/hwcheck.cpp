@@ -5,15 +5,12 @@
 //   pio run -e c3-hwcheck -t upload
 //   pio device monitor -b 115200
 //
-// It walks every component and reports clearly, making NO assumptions:
-//   1. Buzzer    — plays 3 beeps (you confirm you heard them).
-//   2. OLED      — scans I2C on SDA=5/SCL=6; if found, draws a test pattern.
-//   3. Inputs    — watches ALL header pins; when you trigger a reed / press
-//                  the button, it names the GPIO that reacted. If the GPIO
-//                  that lights up is NOT the expected one, your silkscreen
-//                  labels don't match the silicon (or the breakout shifted
-//                  the mapping) — which it will say out loud.
-//   4. Encoder   — reports counts + direction as you turn the knob.
+// On boot it beeps the buzzer and scans for the OLED. Then it shows a LIVE
+// status screen on the OLED — each reed/button as an ON/off box plus the
+// encoder count — and logs every edge to serial so you can verify magnet
+// make/break:
+//   Reed 1 (GPIO3) ON
+//   Reed 1 (GPIO3) off
 //
 // Pin map below MUST mirror main.cpp.
 // ============================================================
@@ -33,6 +30,7 @@ static constexpr int PIN_ENC_B      = 7;
 static constexpr int PIN_ENC_SW     = 20;
 
 U8G2_SSD1306_128X64_NONAME_F_HW_I2C oled(U8G2_R0, /*reset=*/U8X8_PIN_NONE);
+static bool s_oledOK = false;
 
 // ---- encoder decode (same scheme as the firmware) ----------------------
 volatile int32_t g_encCount = 0;
@@ -44,34 +42,26 @@ static void IRAM_ATTR encISR() {
   s_encPrev = c;
 }
 
-// All header GPIOs worth monitoring as inputs (exclude buzzer 1 and I2C 5/6).
-static const int MON[] = {0, 2, 3, 4, 7, 8, 9, 10, 20, 21};
-static const int NMON = sizeof(MON) / sizeof(MON[0]);
-static int s_last[NMON];
-
-static const char* expectedName(int pin) {
-  switch (pin) {
-    case PIN_REED_SLOT1: return "Reed 1 / slot1";
-    case PIN_REED_SLOT2: return "Reed 2 / slot2";
-    case PIN_REED_SLOT3: return "Reed 3 / slot3";
-    case PIN_ENC_SW:     return "Encoder button";
-    case PIN_ENC_A:      return "Encoder A (turn)";
-    case PIN_ENC_B:      return "Encoder B (turn)";
-    default:             return nullptr;  // unexpected pin
-  }
-}
+// ---- monitored inputs (ON == pin pulled LOW) ---------------------------
+struct In { int pin; const char* name; const char* shortName; int last; };
+static In inputs[] = {
+  {PIN_REED_SLOT1, "Reed 1", "R1", HIGH},
+  {PIN_REED_SLOT2, "Reed 2", "R2", HIGH},
+  {PIN_REED_SLOT3, "Reed 3", "R3", HIGH},
+  {PIN_ENC_SW,     "Button", "SW", HIGH},
+};
+static const int NIN = sizeof(inputs) / sizeof(inputs[0]);
 
 static void beep(uint16_t f, uint16_t ms) { tone(PIN_BUZZER, f); delay(ms); noTone(PIN_BUZZER); }
 
 static void checkBuzzer() {
-  Serial.println("\n[1/4] BUZZER (GPIO1): playing 3 rising beeps...");
+  Serial.println("\n[1/3] BUZZER (GPIO1): 3 rising beeps...");
   beep(523, 160); delay(70); beep(784, 160); delay(70); beep(1047, 220);
-  Serial.println("      -> Heard 3 beeps? If silent: check +=GPIO1, -=GND, and that");
-  Serial.println("         it's a PASSIVE buzzer (an active one only drones).");
+  Serial.println("      (silent? needs a PASSIVE buzzer + wiring on GPIO1/GND)");
 }
 
 static void checkOLED() {
-  Serial.println("\n[2/4] OLED (I2C, SDA=GPIO5 SCL=GPIO6):");
+  Serial.println("\n[2/3] OLED (I2C, SDA=GPIO5 SCL=GPIO6):");
   Wire.setPins(PIN_OLED_SDA, PIN_OLED_SCL);
   Wire.begin();
   uint8_t addr = 0;
@@ -80,25 +70,41 @@ static void checkOLED() {
     if (Wire.endTransmission() == 0) { addr = a; break; }
   }
   if (!addr) {
-    Serial.println("      FAIL: no display ACK at 0x3C/0x3D on GPIO5/6.");
-    Serial.println("      Check, in order:");
-    Serial.println("        - VCC at the panel measures 3.3V (this is the #1 cause)");
-    Serial.println("        - GND actually common with the C3");
-    Serial.println("        - SDA lands on GPIO5, SCL on GPIO6");
-    Serial.println("        - if on a breakout, confirm those holes ARE GPIO5/6/3V3/GND");
+    Serial.println("      FAIL: no display on GPIO5/6. Live status will be serial-only.");
+    Serial.println("      Check VCC=3.3V at the panel, GND common, SDA=GPIO5, SCL=GPIO6.");
     return;
   }
-  Serial.printf("      Found 0x%02X. Drawing test pattern...\n", addr);
+  Serial.printf("      OK: found 0x%02X.\n", addr);
   oled.setI2CAddress(addr << 1);
   oled.setBusClock(400000);
   oled.begin();
+  s_oledOK = true;
+}
+
+// Live status screen: each input as an ON/off box, plus the encoder count.
+static void renderStatus() {
+  if (!s_oledOK) return;
   oled.clearBuffer();
-  oled.drawFrame(0, 0, 128, 64);
-  oled.setFont(u8g2_font_7x13B_tr);
-  oled.drawStr(20, 26, "HW CHECK");
-  oled.drawStr(28, 46, "OLED OK");
+  oled.setFont(u8g2_font_6x10_tr);
+
+  oled.drawStr(2, 9, "HW CHECK");
+  char e[16];
+  snprintf(e, sizeof(e), "enc:%ld", (long)g_encCount);
+  oled.drawStr(128 - oled.getStrWidth(e) - 2, 9, e);
+  oled.drawHLine(0, 12, 128);
+
+  int y = 24;
+  for (int i = 0; i < NIN; i++) {
+    bool on = (digitalRead(inputs[i].pin) == LOW);
+    char lbl[20];
+    snprintf(lbl, sizeof(lbl), "%s GPIO%d", inputs[i].shortName, inputs[i].pin);
+    oled.drawStr(2, y, lbl);
+    if (on) oled.drawBox(82, y - 8, 9, 9);
+    else    oled.drawFrame(82, y - 8, 9, 9);
+    oled.drawStr(96, y, on ? "ON" : "off");
+    y += 11;
+  }
   oled.sendBuffer();
-  Serial.println("      PASS: screen should show a bordered 'HW CHECK / OLED OK'.");
 }
 
 void setup() {
@@ -112,36 +118,29 @@ void setup() {
   checkBuzzer();
   checkOLED();
 
-  // Inputs + encoder.
-  for (int i = 0; i < NMON; i++) pinMode(MON[i], INPUT_PULLUP);
+  for (int i = 0; i < NIN; i++) {
+    pinMode(inputs[i].pin, INPUT_PULLUP);
+    inputs[i].last = digitalRead(inputs[i].pin);
+  }
+  pinMode(PIN_ENC_A, INPUT_PULLUP);
+  pinMode(PIN_ENC_B, INPUT_PULLUP);
   s_encPrev = (uint8_t)((digitalRead(PIN_ENC_A) << 1) | digitalRead(PIN_ENC_B));
   attachInterrupt(digitalPinToInterrupt(PIN_ENC_A), encISR, CHANGE);
   attachInterrupt(digitalPinToInterrupt(PIN_ENC_B), encISR, CHANGE);
-  for (int i = 0; i < NMON; i++) s_last[i] = digitalRead(MON[i]);
 
-  Serial.println("\n[3/4] REEDS + BUTTON — trigger each ONE AT A TIME:");
-  Serial.println("      hold a magnet to reed 1, then 2, then 3; press the knob.");
-  Serial.println("      I'll name the GPIO that reacts. Expected: reeds=3/4/10, button=20.");
-  Serial.println("[4/4] ENCODER — turn the knob both ways (expect counts on GPIO0/7).");
-  Serial.println("\nwatching...\n");
+  Serial.println("\n[3/3] LIVE — move a magnet to each reed, press/turn the knob.");
+  Serial.println("      ON = magnet present (reed closed). Watch the OLED too.\n");
 }
 
 void loop() {
-  // Report any monitored pin that goes LOW (switch closed / pressed).
-  for (int i = 0; i < NMON; i++) {
-    int v = digitalRead(MON[i]);
-    if (v != s_last[i]) {
-      s_last[i] = v;
-      if (v == LOW) {
-        const char* name = expectedName(MON[i]);
-        if (name) {
-          Serial.printf("  [OK]  GPIO%d LOW  ->  %s\n", MON[i], name);
-        } else {
-          Serial.printf("  [??]  GPIO%d LOW  ->  UNEXPECTED pin! Something is wired here\n", MON[i]);
-          Serial.println("        that the firmware doesn't use — silkscreen/breakout mismatch?");
-        }
-        beep(900, 35);
-      }
+  // Log both edges of every monitored input.
+  for (int i = 0; i < NIN; i++) {
+    int v = digitalRead(inputs[i].pin);
+    if (v != inputs[i].last) {
+      inputs[i].last = v;
+      bool on = (v == LOW);
+      Serial.printf("%s (GPIO%d) %s\n", inputs[i].name, inputs[i].pin, on ? "ON" : "off");
+      if (on) beep(900, 30);
     }
   }
 
@@ -150,10 +149,17 @@ void loop() {
   static uint32_t lastRep = 0;
   int32_t c = g_encCount;
   if (c != lastEnc && millis() - lastRep > 120) {
-    Serial.printf("  [ENC] count=%ld  (%s)\n", (long)c, (c > lastEnc) ? "CW +" : "CCW -");
+    Serial.printf("Encoder (GPIO0/7) count=%ld  (%s)\n", (long)c, (c > lastEnc) ? "CW +" : "CCW -");
     lastEnc = c;
     lastRep = millis();
   }
 
-  delay(5);
+  // Refresh the OLED status ~20 fps.
+  static uint32_t lastDraw = 0;
+  if (millis() - lastDraw >= 50) {
+    lastDraw = millis();
+    renderStatus();
+  }
+
+  delay(2);
 }
