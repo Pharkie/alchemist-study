@@ -5,11 +5,13 @@
 // potion bottles are seated, an OLED names the resulting potion, a
 // rotary encoder is the "stir" control, and a passive buzzer scores it.
 //
-// State machine: IDLE -> IDENTIFY -> STIRRING -> REVEAL.
-//   IDLE      empty base; "Place ingredients" + realm-switch hint.
-//   IDENTIFY  >=1 bottle seated; lists ingredient name(s), "turn to stir".
-//   STIRRING  encoder turning; rising trill + swirl animation; decays back.
-//   REVEAL    short press (after stirring) names the potion + jingle.
+// State machine: IDLE -> IDENTIFY -> STIRRING -> REVEAL, plus SETTINGS + DIAG.
+//   IDLE      empty base; "Place ingredients" + "Press for settings".
+//   IDENTIFY  >=1 bottle seated; features the ingredient name(s) + sparkles.
+//   STIRRING  turn to fill the power bar; when full -> "Press to create".
+//   REVEAL    press names the potion with a random animation; auto-returns ~3s.
+//   SETTINGS  press on idle; realm / mute / brightness / stir level / etc.
+//   DIAG      built-in hardware test (Settings -> Hardware Test).
 //
 // PLATFORM: arduino-esp32 3.x via pioarduino. Core 3.x is required for
 //   tone()/noTone() (LEDC-backed) to behave as used here. See platformio.ini.
@@ -143,11 +145,11 @@ static const char* const kPotions[UNI_COUNT][8] = {
 
 // ---- Tunables (revisit on the bench in Phase 6) ------------------------
 static constexpr uint32_t REED_DEBOUNCE_MS  = 40;
-static constexpr uint32_t LONG_PRESS_MS     = 600;   // hold = toggle universe
+static constexpr uint32_t LONG_PRESS_MS     = 600;   // hold = leave a menu / cancel an edit
 static constexpr uint32_t BTN_DEBOUNCE_MS   = 30;
 static constexpr uint32_t RENDER_INTERVAL_MS = 33;   // ~30 fps display cap
 static constexpr uint32_t REVEAL_HOLD_MS     = 3000;  // reveal auto-returns to idle after this
-static constexpr uint32_t STIR_ACTIVE_MS     = 150;  // motion within this = still stirring (filling)
+static constexpr uint32_t STIR_ACTIVE_MS     = 150;  // fill/drain boundary: moved within this = fill, else drain
 static constexpr float    STIR_DECAY_PER_S   = 0.20f; // bar drains 20%/sec while paused (not a reset)
 static constexpr uint32_t STIR_IDLE_BACK_MS  = 2500; // empty + idle this long -> return to identify
 static constexpr float    STIR_ANGLE_STEP   = 0.18f;  // swirl radians per encoder count
