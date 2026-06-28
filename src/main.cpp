@@ -117,6 +117,7 @@ static constexpr uint16_t PITCH_MAX_HZ      = 1100;
 // Full-buffer (_F_) SSD1306 over hardware I2C.
 U8G2_SSD1306_128X64_NONAME_F_HW_I2C oled(U8G2_R0, /*reset=*/U8X8_PIN_NONE);
 Preferences prefs;
+static bool g_haveDisplay = false;  // set at boot; if false we run headless
 
 // ---- Runtime state -----------------------------------------------------
 enum State { ST_IDLE, ST_IDENTIFY, ST_STIRRING, ST_REVEAL };
@@ -225,8 +226,9 @@ static void onComboChanged(uint8_t newCombo) {
   s_stirProgress = 0.0f;
   s_stirReady = false;
   g_state = (newCombo == 0) ? ST_IDLE : ST_IDENTIFY;
-  Serial.printf("[combo] %u%u%u -> %u (%s)\n",
-                (newCombo >> 0) & 1, (newCombo >> 1) & 1, (newCombo >> 2) & 1,
+  // Print MSB-first (slot3 slot2 slot1) to match the spec's "100 Nightshade".
+  Serial.printf("[combo] %u%u%u (val %u) -> %s\n",
+                (newCombo >> 2) & 1, (newCombo >> 1) & 1, (newCombo >> 0) & 1,
                 newCombo, newCombo ? kPotions[g_universe][newCombo] : "idle");
 }
 
@@ -405,6 +407,7 @@ static void renderReveal() {
 }
 
 static void render() {
+  if (!g_haveDisplay) return;  // headless: skip drawing if no panel on the bus
   switch (g_state) {
     case ST_IDLE:     renderIdle();     break;
     case ST_IDENTIFY: renderIdentify(); break;
@@ -433,11 +436,23 @@ void setup() {
 
   pinMode(PIN_BUZZER, OUTPUT);
 
-  // OLED. Bump I2C to 400 kHz so a full-buffer send is ~2-3 ms, keeping the
-  // loop responsive during the swirl animation.
-  Wire.begin(PIN_OLED_SDA, PIN_OLED_SCL);
+  // OLED. Let U8g2 own the single Wire.begin(); we only preset the C3's I2C
+  // pins. Calling Wire.begin() ourselves AND letting U8g2 begin() again leaves
+  // the core-3.x i2c-ng driver stuck in ESP_ERR_INVALID_STATE (every transmit
+  // fails). setPins() just records the pins for U8g2's begin() to use.
+  // Bus at 400 kHz so a full-buffer send is ~2-3 ms (smooth swirl animation).
+  Wire.setPins(PIN_OLED_SDA, PIN_OLED_SCL);
   oled.setBusClock(400000);
   oled.begin();
+
+  // Probe for the panel. If it's absent/miswired, run headless: skip all
+  // drawing (otherwise every sendBuffer would flood the log with
+  // ESP_ERR_INVALID_STATE and drown the input traces). Wire is already up
+  // from oled.begin(), so this probe is just one address transaction.
+  Wire.beginTransmission(0x3C);
+  g_haveDisplay = (Wire.endTransmission() == 0);
+  Serial.printf("[boot] OLED %s\n",
+                g_haveDisplay ? "found at 0x3C" : "NOT FOUND — running headless");
 
   // Restore the chosen universe from NVS (defaults to Skyrim).
   prefs.begin("alchemy", false);
