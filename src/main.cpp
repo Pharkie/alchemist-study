@@ -151,7 +151,6 @@ static constexpr uint32_t RENDER_INTERVAL_MS = 33;   // ~30 fps display cap
 static constexpr uint32_t REVEAL_ANIM_MS     = 1000; // phase 1: build-up animation (no name yet)
 static constexpr uint32_t REVEAL_NAME_MS     = 3000; // phase 2: hold the potion name, then idle
 static constexpr uint32_t STIR_ACTIVE_MS     = 150;  // fill/drain boundary: moved within this = fill, else drain
-static constexpr float    STIR_DECAY_PER_S   = 0.20f; // bar drains 20%/sec while paused (not a reset)
 static constexpr uint32_t STIR_IDLE_BACK_MS  = 2500; // empty + idle this long -> return to identify
 static constexpr uint32_t REED_GRACE_MS      = 2500; // identify: keep the combo this long after the base empties
 static constexpr float    STIR_ANGLE_STEP   = 0.18f;  // swirl radians per encoder count
@@ -347,8 +346,9 @@ static const char* const kOnOff[] = { "Off", "On" };
 // harder the fuller (further right) the bar already is; higher levels start a
 // touch slower and slow down much more steeply toward the top.
 static const char* const  kStirLabels[] = { "Easy", "Medium", "Hard" };
-static const float        kStirSpeed[]  = { 0.55f, 0.50f, 0.45f }; // progress/sec at empty
-static const float        kStirResist[] = { 0.30f, 0.62f, 0.86f }; // how much it slows toward full
+static const float        kStirSpeed[]  = { 0.55f, 0.48f, 0.40f }; // fill rate (progress/sec) at empty
+static const float        kStirResist[] = { 0.40f, 0.74f, 0.92f }; // how steeply it slows toward full
+static const float        kStirDecay[]  = { 0.20f, 0.24f, 0.28f }; // drain/sec when paused (+20%/level)
 static constexpr int      kStirN        = 3;
 
 static void applyBrightness() {
@@ -524,7 +524,7 @@ static void updateStir(uint32_t now, uint32_t dt, int32_t d) {
   } else {
     // Paused: drain gradually (20%/sec) rather than snapping to zero, so brief
     // hesitations barely cost progress and you resume from where it dropped.
-    s_stirProgress -= STIR_DECAY_PER_S * (float)dt / 1000.0f;
+    s_stirProgress -= kStirDecay[g_stirLevelIdx] * (float)dt / 1000.0f;
     if (s_stirProgress < 0.0f) s_stirProgress = 0.0f;
     // Once fully drained and idle a while, drift back to the ingredient screen.
     if (s_stirProgress <= 0.0f && idle >= STIR_IDLE_BACK_MS) {

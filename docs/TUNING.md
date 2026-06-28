@@ -18,10 +18,10 @@ change.
 
 | Constant | Default | Effect |
 |---|---|---|
-| `kStirSpeed[]` | `0.55 / 0.50 / 0.45` | Fill rate (progress/sec) at empty, per level. |
-| `kStirResist[]` | `0.30 / 0.62 / 0.86` | How much the fill slows toward full. Higher = harder right side. |
+| `kStirSpeed[]` | `0.55 / 0.48 / 0.40` | Fill rate (progress/sec) at empty, per Easy/Medium/Hard. |
+| `kStirResist[]` | `0.40 / 0.74 / 0.92` | How steeply the fill slows toward full. Higher = harder right side. |
+| `kStirDecay[]` | `0.20 / 0.24 / 0.28` | Drain/sec while paused, per level (+20%/level). |
 | `STIR_ACTIVE_MS` | `150` | Motion within this window counts as "still stirring". |
-| `STIR_DECAY_PER_S` | `0.20` | Bar drains this fraction/sec while paused. |
 | `STIR_IDLE_BACK_MS` | `2500` | Empty + idle this long → return to identify. |
 | `STIR_ANGLE_STEP` | `0.18` | Radians the swirl mote moves per encoder count (visual only). |
 
