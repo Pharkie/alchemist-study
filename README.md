@@ -110,7 +110,7 @@ Free for noncommercial use under the **PolyForm Noncommercial License 1.0.0**.
 **Commercial use is not free — a commercial license is required.** See
 [LICENSE](LICENSE) for full terms.
 
-© 2025 Adam Knowles. All rights reserved.
+© 2026 Adam Knowles. All rights reserved.
 
 ## LLM Generated, Human Reviewed
 
