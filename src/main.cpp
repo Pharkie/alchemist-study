@@ -146,6 +146,7 @@ static constexpr uint32_t REED_DEBOUNCE_MS  = 40;
 static constexpr uint32_t LONG_PRESS_MS     = 600;   // hold = toggle universe
 static constexpr uint32_t BTN_DEBOUNCE_MS   = 30;
 static constexpr uint32_t RENDER_INTERVAL_MS = 33;   // ~30 fps display cap
+static constexpr uint32_t REVEAL_HOLD_MS     = 3000;  // reveal auto-returns to idle after this
 static constexpr uint32_t STIR_ACTIVE_MS     = 150;  // motion within this = still stirring (filling)
 static constexpr float    STIR_DECAY_PER_S   = 0.20f; // bar drains 20%/sec while paused (not a reset)
 static constexpr uint32_t STIR_IDLE_BACK_MS  = 2500; // empty + idle this long -> return to identify
@@ -1005,6 +1006,17 @@ void loop() {
 
   updateButton(now);
   updateAudio(now);
+
+  // After the reveal has been up a few seconds, drift back to the idle
+  // "Place ingredients" screen (ready for the next brew). Bottles left on the
+  // base just sit on idle until they're changed.
+  if (g_state == ST_REVEAL && (now - s_revealMs) >= REVEAL_HOLD_MS) {
+    g_combo = 0;
+    s_stirProgress = 0.0f;
+    s_stirReady = false;
+    s_baseEmptied = false;
+    g_state = ST_IDLE;
+  }
 
   if (now - s_lastRenderMs >= RENDER_INTERVAL_MS) {
     s_lastRenderMs = now;

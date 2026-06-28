@@ -94,7 +94,8 @@ States: **IDLE → IDENTIFY → STIRRING → REVEAL**
   real combo change.
 - **REVEAL** — one of **three random full-screen animations** (starburst /
   rising bubbles / expanding rings) reveals the potion name (wrapped to two lines
-  if wide) over a short ascending jingle.
+  if wide) over a short ascending jingle. After ~3 s it auto-returns to IDLE
+  ("Place ingredients"), ready for the next brew.
 
 ### Interaction rules
 
