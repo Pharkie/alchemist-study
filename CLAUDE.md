@@ -85,14 +85,16 @@ States: **IDLE → IDENTIFY → STIRRING → REVEAL**
 - **IDENTIFY** — ≥1 bottle seated. **Features** the ingredient name(s) in an
   elegant serif with sparkles (a single ingredient large, two/three as a flanked
   list); no realm header. A subtle "turn to stir" cue.
-- **STIRRING** — encoder is turning. A **power bar** fills over the configured
-  **Stir Time** (1/3/5/8 s, a setting) of active stirring, with a swirling vortex
-  + rising trill (~320→1100 Hz). **Pause and the bar drains gradually (~20%/sec)**
-  rather than resetting, so brief hesitations barely cost progress; once empty and
-  idle a while (~2.5 s) it drifts back to IDENTIFY. When the bar fills it **arms**
-  ("Press to brew") and holds until a press or a real combo change.
-- **REVEAL** — shows the resulting potion name (wrap to two lines if wider than
-  128px) with a short ascending success jingle.
+- **STIRRING** — encoder is turning. A **power bar** fills as you stir, getting
+  **harder the fuller it gets** (the **Stir Level** setting — Easy/Medium/Hard —
+  sets how steeply it slows toward the right), with a swirling vortex + rising
+  trill (~320→1100 Hz). **Pause and the bar drains gradually (~20%/sec)** rather
+  than resetting; once empty and idle a while (~2.5 s) it drifts back to IDENTIFY.
+  When the bar fills it **arms** ("Press to brew") and holds until a press or a
+  real combo change.
+- **REVEAL** — one of **three random full-screen animations** (starburst /
+  rising bubbles / expanding rings) reveals the potion name (wrapped to two lines
+  if wide) over a short ascending jingle.
 
 ### Interaction rules
 
@@ -113,14 +115,17 @@ States: **IDLE → IDENTIFY → STIRRING → REVEAL**
 
 ### Settings menu (`ST_SETTINGS`) — a reusable mini-menu
 
-Open with a press on the idle screen; turn to move, press to change/activate,
-long-press (or **Exit**) to leave. Items are a data table (`kMenu` in
+Open with a press on the idle screen. **Turn** to move between items; **press**
+to start editing a value, **turn** to change it (live), **press** to confirm;
+**long-press** cancels an edit, or (when not editing) leaves the menu. Actions
+(Hardware Test, Exit) run on press. Items are a data table (`kMenu` in
 `main.cpp`) of `{label, kind, get/set, …}`, so adding one is a single row.
 
 - **Realm** — 7 universes: Skyrim, Baldur's Gate 3, The Witcher 3, World of
   Warcraft, Zelda, Minecraft, Ultima VII (persisted; replaces the old long-press)
 - **Mute** — Off / On (gates all audio: chime, trill, jingles, error beep)
 - **Bright** — 1–5 (OLED contrast via `setContrast`)
+- **Stir Level** — Easy / Medium / Hard (fill difficulty curve)
 - **Hardware Test** — opens a built-in live diagnostic (`ST_DIAG`): reed/button
   boxes + encoder count; long-press to return. (Same idea as the `c3-hwcheck`
   build, but in-firmware so it needs no reflash.)

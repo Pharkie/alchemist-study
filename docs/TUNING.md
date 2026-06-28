@@ -7,18 +7,21 @@ under `// ---- Tunables` near the top of `src/main.cpp`. Edit, then reflash:
 pio run -e c3-dev -t upload
 ```
 
-## Stir model (time-based)
+## Stir model (difficulty curve)
 
-The power bar fills over **Stir Time** seconds of *active* stirring (Stir Time is
-a runtime setting: 1/3/5/8 s — `kStirSecs` in `main.cpp`). Pause and the bar
-**drains gradually** (not a reset); resume and it continues from there. Once empty
-and idle a while it drifts back to identify. A full bar arms ("Press to brew") and
-holds until a press or a real combo change.
+The power bar fills as you stir, with **diminishing returns toward the right**:
+`rate = kStirSpeed[level] * (1 - kStirResist[level] * progress)`. The **Stir
+Level** setting (Easy/Medium/Hard) picks the curve. Pause and the bar **drains
+gradually** (not a reset); resume and it continues. Empty + idle a while → back
+to identify. A full bar arms ("Press to brew") and holds until a press or combo
+change.
 
 | Constant | Default | Effect |
 |---|---|---|
-| `STIR_ACTIVE_MS` | `150` | Motion within this window counts as "still stirring" (bar fills). |
-| `STIR_DECAY_PER_S` | `0.20` | Bar drains this fraction/sec while paused. Higher = drains faster. |
+| `kStirSpeed[]` | `0.55 / 0.50 / 0.45` | Fill rate (progress/sec) at empty, per level. |
+| `kStirResist[]` | `0.30 / 0.62 / 0.86` | How much the fill slows toward full. Higher = harder right side. |
+| `STIR_ACTIVE_MS` | `150` | Motion within this window counts as "still stirring". |
+| `STIR_DECAY_PER_S` | `0.20` | Bar drains this fraction/sec while paused. |
 | `STIR_IDLE_BACK_MS` | `2500` | Empty + idle this long → return to identify. |
 | `STIR_ANGLE_STEP` | `0.18` | Radians the swirl mote moves per encoder count (visual only). |
 
@@ -45,8 +48,9 @@ Melodies (success jingle, realm-toggle beep, "not ready" buzz) are the
 ## Settings menu
 
 Runtime settings live in the on-device **Settings** menu (press the knob on the
-idle screen): **Realm**, **Mute**, **Brightness** (1–5), **Stir Time** (1/3/5/8 s),
-**Hardware Test**, **Firmware**, **Exit**. Mute, brightness, and realm persist to NVS. The menu is a
+idle screen; turn to move, press to edit a value, turn to change, press to
+confirm): **Realm**, **Mute**, **Brightness** (1–5), **Stir Level**
+(Easy/Medium/Hard), **Hardware Test**, **Firmware**, **Exit**. Mute, brightness, and realm persist to NVS. The menu is a
 data table (`kMenu` in `main.cpp`) — add an item by appending one row
 (`{label, kind, get, set, …}`); kinds are choice / range / info / action.
 

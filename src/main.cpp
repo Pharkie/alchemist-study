@@ -24,6 +24,7 @@
 #include <Preferences.h>
 #include <math.h>
 #include <string.h>
+#include "esp_random.h"
 
 // ---- Pin map (ESP32-C3 Super Mini, native USB) -------------------------
 // Reed switches: INPUT_PULLUP; a magnet in the bottle base pulls the line
@@ -153,7 +154,8 @@ static constexpr uint16_t PITCH_MIN_HZ      = 320;
 static constexpr uint16_t PITCH_MAX_HZ      = 1100;
 static constexpr int32_t  ENC_STEP          = 4;     // encoder counts per menu/select step
 
-#define FW_VERSION "v0.5"
+// Firmware version — keep in step with the git tag / GitHub release.
+#define FW_VERSION "v0.1"
 
 // ---- Hardware objects --------------------------------------------------
 // Full-buffer (_F_) SSD1306 over hardware I2C.
@@ -168,11 +170,13 @@ static uint8_t  g_combo    = 0;            // committed combo (0..7)
 static Universe g_universe = UNI_SKYRIM;
 
 // Persisted settings + UI cursors.
-static bool     g_mute       = false;
-static uint8_t  g_brightness = 3;          // 1..5
-static uint8_t  g_stirTimeIdx = 1;         // index into kStirSecs (default 3s)
-static int      s_menuIdx    = 0;          // highlighted settings item
-static int32_t  s_navAccum   = 0;          // encoder accumulator for discrete steps
+static bool     g_mute        = false;
+static uint8_t  g_brightness  = 3;         // 1..5
+static uint8_t  g_stirLevelIdx = 1;        // index into kStirLabels (Easy/Medium/Hard)
+static int      s_menuIdx     = 0;         // highlighted settings item
+static bool     s_menuEditing = false;     // true while adjusting the highlighted item
+static int32_t  s_navAccum    = 0;         // encoder accumulator for discrete steps
+static int      s_revealStyle = 0;         // which reveal animation is playing (0..2)
 
 // reed debounce / latch
 static uint8_t  s_rawComboLast = 0;
@@ -314,10 +318,13 @@ static void onSensedComboChange() {
 // ---- Settings model (reusable mini-menu) -------------------------------
 static const char* const kOnOff[] = { "Off", "On" };
 
-// Stir time: seconds of stirring needed to fill the power bar.
-static const int          kStirSecs[]   = { 1, 3, 5, 8 };
-static const char* const  kStirLabels[] = { "1s", "3s", "5s", "8s" };
-static constexpr int      kStirN        = 4;
+// Stir level: difficulty curve for filling the power bar. Each increment gets
+// harder the fuller (further right) the bar already is; higher levels start a
+// touch slower and slow down much more steeply toward the top.
+static const char* const  kStirLabels[] = { "Easy", "Medium", "Hard" };
+static const float        kStirSpeed[]  = { 0.55f, 0.50f, 0.45f }; // progress/sec at empty
+static const float        kStirResist[] = { 0.30f, 0.62f, 0.86f }; // how much it slows toward full
+static constexpr int      kStirN        = 3;
 
 static void applyBrightness() {
   if (g_haveDisplay) oled.setContrast((uint8_t)map(g_brightness, 1, 5, 16, 255));
@@ -332,12 +339,12 @@ static void setMute(int v)   { g_mute = (v != 0); prefs.putUChar("mute", g_mute 
 static int  getBright()      { return g_brightness; }
 static void setBright(int v) { g_brightness = (uint8_t)v; prefs.putUChar("bright", g_brightness);
                                applyBrightness(); }
-static int  getStirTime()    { return g_stirTimeIdx; }
-static void setStirTime(int v){ g_stirTimeIdx = (uint8_t)v; prefs.putUChar("stirt", g_stirTimeIdx); }
+static int  getStirLevel()    { return g_stirLevelIdx; }
+static void setStirLevel(int v){ g_stirLevelIdx = (uint8_t)v; prefs.putUChar("stirlvl", g_stirLevelIdx); }
 
-static void settingsEnter() { g_state = ST_SETTINGS; s_menuIdx = 0; s_navAccum = 0; }
-static void settingsExit()  { g_state = ST_IDLE;     s_navAccum = 0; }
-static void diagEnter()     { g_state = ST_DIAG;     s_navAccum = 0; }
+static void settingsEnter() { g_state = ST_SETTINGS; s_menuIdx = 0; s_navAccum = 0; s_menuEditing = false; }
+static void settingsExit()  { g_state = ST_IDLE;     s_navAccum = 0; s_menuEditing = false; }
+static void diagEnter()     { g_state = ST_DIAG;     s_navAccum = 0; s_menuEditing = false; }
 
 enum ItemKind { K_CHOICE, K_RANGE, K_INFO, K_ACTION };
 struct MenuItem {
@@ -356,22 +363,12 @@ static const MenuItem kMenu[] = {
   { "Realm",        K_CHOICE, getRealm,  setRealm,  kUniverseName, UNI_COUNT, 0, 0, nullptr,    nullptr      },
   { "Mute",         K_CHOICE, getMute,   setMute,   kOnOff,        2,         0, 0, nullptr,    nullptr      },
   { "Bright",       K_RANGE,  getBright,   setBright,   nullptr,     0,      1, 5, nullptr,    nullptr      },
-  { "Stir Time",    K_CHOICE, getStirTime, setStirTime, kStirLabels, kStirN, 0, 0, nullptr,    nullptr      },
+  { "Stir Level",   K_CHOICE, getStirLevel, setStirLevel, kStirLabels, kStirN, 0, 0, nullptr,  nullptr      },
   { "Hardware Test",K_ACTION, nullptr,   nullptr,   nullptr,       0,         0, 0, nullptr,    diagEnter    },
   { "Firmware",     K_INFO,   nullptr,   nullptr,   nullptr,       0,         0, 0, FW_VERSION, nullptr      },
   { "Exit",         K_ACTION, nullptr,   nullptr,   nullptr,       0,         0, 0, nullptr,    settingsExit },
 };
 static const int kMenuN = (int)(sizeof(kMenu) / sizeof(kMenu[0]));
-
-static void menuActivate() {
-  const MenuItem& m = kMenu[s_menuIdx];
-  switch (m.kind) {
-    case K_CHOICE: if (m.set) m.set((m.get() + 1) % m.nChoices); break;
-    case K_RANGE:  if (m.set) { int v = m.get() + 1; if (v > m.rmax) v = m.rmin; m.set(v); } break;
-    case K_INFO:   break;
-    case K_ACTION: if (m.action) m.action(); break;
-  }
-}
 
 // Encoder raw delta -> discrete detent steps (so menus move one item per click).
 static int navSteps(int32_t d) {
@@ -381,10 +378,33 @@ static int navSteps(int32_t d) {
   return steps;
 }
 
+// Turn the knob in Settings: navigate items, or (in edit mode) scroll the
+// highlighted item's value live.
 static void updateMenuNav(int32_t d) {
   int steps = navSteps(d);
   if (!steps) return;
-  s_menuIdx = ((s_menuIdx + steps) % kMenuN + kMenuN) % kMenuN;
+  if (s_menuEditing) {
+    const MenuItem& m = kMenu[s_menuIdx];
+    if (m.kind == K_CHOICE && m.set) {
+      int n = m.nChoices;
+      m.set(((m.get() + steps) % n + n) % n);   // wrap through choices
+    } else if (m.kind == K_RANGE && m.set) {
+      int v = m.get() + steps;
+      if (v < m.rmin) v = m.rmin;
+      if (v > m.rmax) v = m.rmax;                // clamp the range
+      m.set(v);
+    }
+  } else {
+    s_menuIdx = ((s_menuIdx + steps) % kMenuN + kMenuN) % kMenuN;
+  }
+}
+
+// Press the knob in Settings: confirm an edit, run an action, or enter edit.
+static void menuPress() {
+  if (s_menuEditing) { s_menuEditing = false; return; }
+  const MenuItem& m = kMenu[s_menuIdx];
+  if (m.kind == K_ACTION) { if (m.action) m.action(); }
+  else if (m.kind == K_CHOICE || m.kind == K_RANGE) { s_menuEditing = true; }
 }
 
 // ---- Button actions (state-aware) --------------------------------------
@@ -399,6 +419,7 @@ static void onShortPress(uint32_t now) {
       if (s_stirReady) {
         g_state = ST_REVEAL;
         s_revealMs = now;
+        s_revealStyle = (int)(esp_random() % 3);   // pick a random reveal animation
         startMelody(MEL_SUCCESS, NUM_NOTES(MEL_SUCCESS), now);
         Serial.printf("[reveal] %s\n", kPotions[g_universe][g_combo]);
       } else {
@@ -406,7 +427,7 @@ static void onShortPress(uint32_t now) {
       }
       break;
     case ST_SETTINGS:
-      menuActivate();
+      menuPress();
       break;
     case ST_REVEAL:
     case ST_DIAG:
@@ -417,8 +438,11 @@ static void onShortPress(uint32_t now) {
 static void onLongPress(uint32_t now) {
   (void)now;
   switch (g_state) {
-    case ST_SETTINGS: settingsExit();  break;  // leave the menu to idle
-    case ST_DIAG:     settingsEnter(); break;  // diagnostic back to the menu
+    case ST_SETTINGS:
+      if (s_menuEditing) s_menuEditing = false;  // cancel an edit...
+      else settingsExit();                       // ...otherwise leave the menu
+      break;
+    case ST_DIAG:     settingsEnter(); break;     // diagnostic back to the menu
     default:          break;
   }
 }
@@ -456,9 +480,12 @@ static void updateStir(uint32_t now, uint32_t dt, int32_t d) {
 
   uint32_t idle = now - s_lastStirMs;
   if (idle < STIR_ACTIVE_MS) {
-    // Actively stirring: fill the bar over the configured stir time.
-    float secs = (float)kStirSecs[g_stirTimeIdx];
-    s_stirProgress += (float)dt / (secs * 1000.0f);
+    // Actively stirring: fill, but with diminishing returns toward the right.
+    // rate = speed * (1 - resist*progress) — higher levels slow more steeply.
+    float p = s_stirProgress;
+    float rate = kStirSpeed[g_stirLevelIdx] * (1.0f - kStirResist[g_stirLevelIdx] * p);
+    if (rate < 0.03f) rate = 0.03f;  // floor so the bar can always top out
+    s_stirProgress += rate * (float)dt / 1000.0f;
     if (s_stirProgress >= 1.0f) { s_stirProgress = 1.0f; s_stirReady = true; }
   } else {
     // Paused: drain gradually (20%/sec) rather than snapping to zero, so brief
@@ -708,36 +735,71 @@ static void drawPotionName(const char* name) {
   drawFitted(name, fonts, 3, 112, 39, 32, 47);
 }
 
+// --- Reveal animations: three styles, picked at random per brew ----------
+// Style 0: sparkles burst outward (elliptical) from the centre.
+static void animStarburst(uint32_t since) {
+  float p = (float)since / 1100.0f;
+  if (p > 1.0f) p = 1.0f;
+  for (int i = 0; i < 12; i++) {
+    float a = i * 0.5236f + p * 1.6f;
+    float rad = 5.0f + p * 56.0f;
+    int x = 64 + (int)lroundf(rad * cosf(a));
+    int y = 33 + (int)lroundf(rad * sinf(a) * 0.5f);
+    int r = 2 - (int)(p * 2.0f);
+    if (x > 5 && x < 123 && y > 5 && y < 59) drawSparkle(x, y, r < 0 ? 0 : r);
+  }
+}
+
+// Style 1: a brew surge — bubbles rise from the bottom and grow as they climb.
+static void animBubbles(uint32_t since) {
+  for (int i = 0; i < 9; i++) {
+    int t = (int)since - i * 45;
+    if (t < 0 || t > 850) continue;
+    float f = (float)t / 850.0f;
+    int x = 12 + i * 13 + (int)lroundf(3.0f * sinf((float)t * 0.02f));
+    int y = 57 - (int)lroundf(f * 50.0f);
+    int r = 1 + (int)lroundf(f * 2.0f);
+    if (y > 4) oled.drawCircle(x, y, r);
+  }
+}
+
+// Style 2: magic pulse — concentric rings expand outward from the centre.
+static void animRings(uint32_t since) {
+  for (int k = 0; k < 3; k++) {
+    int t = (int)since - k * 200;
+    if (t < 0) continue;
+    int rad = (int)((float)t * 0.062f);
+    if (rad > 2 && rad < 62) oled.drawCircle(64, 33, rad);
+  }
+}
+
 static void renderReveal(uint32_t now) {
   oled.clearBuffer();
   drawFancyFrame();
 
   uint32_t since = now - s_revealMs;
+  const uint32_t ANIM_MS = 1200;
 
-  // Opening flourish: a ring of sparkles bursting outward, fading over ~1.1s.
-  if (since < 1100) {
-    float p = (float)since / 1100.0f;
-    for (int i = 0; i < 10; i++) {
-      float a = i * 0.6283f + p * 1.5f;
-      float rad = 6.0f + p * 52.0f;
-      int x = 64 + (int)lroundf(rad * cosf(a));
-      int y = 33 + (int)lroundf(rad * sinf(a) * 0.5f);
-      int r = 2 - (int)(p * 2.0f);
-      if (x > 5 && x < 123 && y > 5 && y < 59) drawSparkle(x, y, r < 0 ? 0 : r);
+  if (since < ANIM_MS) {
+    switch (s_revealStyle) {
+      case 1:  animBubbles(since);   break;
+      case 2:  animRings(since);     break;
+      default: animStarburst(since); break;
     }
   } else {
-    // Settled: gentle twinkles in the corners.
-    int r = ((now / 250) & 1) ? 1 : 0;
+    int r = ((now / 250) & 1) ? 1 : 0;      // settled: gentle corner twinkles
     drawSparkle(11, 11, r); drawSparkle(117, 11, r);
     drawSparkle(11, 53, r); drawSparkle(117, 53, r);
   }
 
-  // The potion name alone — the realm is implicit. A small ornamental
-  // flourish up top where the caption used to sit, then the name.
-  oled.drawHLine(44, 15, 40);
-  drawDiamond(40, 15);
-  drawDiamond(88, 15);
-  drawPotionName(kPotions[g_universe][g_combo]);
+  // The name reveals partway through each animation, then stays put.
+  uint32_t nameAt = (s_revealStyle == 1) ? 600 : (s_revealStyle == 2) ? 480 : 320;
+  if (since >= nameAt) {
+    oled.drawHLine(44, 15, 40);
+    drawDiamond(40, 15);
+    drawDiamond(88, 15);
+    drawPotionName(kPotions[g_universe][g_combo]);
+  }
   oled.sendBuffer();
 }
 
@@ -771,12 +833,24 @@ static void renderSettings() {
     int i = first + row;
     int y = 22 + row * 10;
     bool sel = (i == s_menuIdx);
-    if (sel) { oled.drawBox(0, y - 8, 128, 10); oled.setDrawColor(0); }
+    bool editing = sel && s_menuEditing;
+    if (sel && !editing) { oled.drawBox(0, y - 8, 128, 10); oled.setDrawColor(0); }
     oled.drawStr(4, y, kMenu[i].label);
     char tmp[16];
     const char* v = menuValueStr(kMenu[i], tmp, sizeof(tmp));
-    if (v && v[0]) oled.drawStr(128 - oled.getStrWidth(v) - 4, y, v);
-    if (sel) oled.setDrawColor(1);
+    if (v && v[0]) {
+      int vw = oled.getStrWidth(v);
+      int vx = 128 - vw - 4;
+      if (editing) {                      // editing: invert just the value cell
+        oled.drawBox(vx - 3, y - 8, vw + 6, 10);
+        oled.setDrawColor(0);
+        oled.drawStr(vx, y, v);
+        oled.setDrawColor(1);
+      } else {
+        oled.drawStr(vx, y, v);
+      }
+    }
+    if (sel && !editing) oled.setDrawColor(1);
   }
   oled.sendBuffer();
 }
@@ -853,8 +927,8 @@ void setup() {
   g_brightness = prefs.getUChar("bright", 3);
   if (g_brightness < 1) g_brightness = 1;
   if (g_brightness > 5) g_brightness = 5;
-  g_stirTimeIdx = prefs.getUChar("stirt", 1);
-  if (g_stirTimeIdx >= kStirN) g_stirTimeIdx = 1;
+  g_stirLevelIdx = prefs.getUChar("stirlvl", 1);
+  if (g_stirLevelIdx >= kStirN) g_stirLevelIdx = 1;
 
   // Boot chime: a rising two-note "awake" signal (also a buzzer test).
   if (!g_mute) {
