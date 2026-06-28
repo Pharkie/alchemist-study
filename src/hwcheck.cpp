@@ -123,7 +123,14 @@ static void renderStatus(uint32_t now) {
     }
     y += 11;
   }
+  uint32_t t0 = micros();
   oled.sendBuffer();
+  uint32_t ms = (micros() - t0) / 1000;
+  static uint32_t lastTimeLog = 0;
+  if (ms > 40 || now - lastTimeLog > 1000) {
+    lastTimeLog = now;
+    Serial.printf("[time] sendBuffer = %lu ms\n", (unsigned long)ms);
+  }
 }
 
 void setup() {
@@ -153,6 +160,7 @@ void setup() {
 
 void loop() {
   uint32_t now = millis();
+  bool dirty = false;
 
   // Log both edges of every monitored input.
   for (int i = 0; i < NIN; i++) {
@@ -163,6 +171,7 @@ void loop() {
       Serial.printf("%s (GPIO%d) %s\n", inputs[i].name, inputs[i].pin, on ? "ON" : "off");
       if (inputs[i].pin == PIN_ENC_SW && on) { s_lastPressMs = now; s_pressCount++; }
       if (on) beep(900, 30);
+      dirty = true;                       // redraw immediately on any input edge
     }
   }
 
@@ -180,8 +189,8 @@ void loop() {
   // live), otherwise a slower idle tick that still expires the press banner.
   static uint32_t lastDraw = 0;
   static int32_t lastDrawnEnc = 0;
-  bool encMoving = (g_encCount != lastDrawnEnc);
-  if (now - lastDraw >= (uint32_t)(encMoving ? 20 : 150)) {
+  bool active = dirty || (g_encCount != lastDrawnEnc);
+  if (now - lastDraw >= (uint32_t)(active ? 20 : 150)) {
     lastDraw = now;
     lastDrawnEnc = g_encCount;
     renderStatus(now);
