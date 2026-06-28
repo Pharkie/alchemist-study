@@ -103,3 +103,21 @@ The same diagnostic is also reachable in-firmware via **Settings → Hardware Te
    page, and Home Assistant integration (e.g. announce a brew as an event). The
    C3's radio stays available; it's added once the magic works on the bench. See
    [BACKLOG.md](BACKLOG.md).
+
+## License
+
+Free for noncommercial use under the **PolyForm Noncommercial License 1.0.0**.
+**Commercial use is not free — a commercial license is required.** See
+[LICENSE](LICENSE) for full terms.
+
+© 2025 Adam Knowles. All rights reserved.
+
+## LLM Generated, Human Reviewed
+
+This code was generated with [Claude Code](https://claude.com/claude-code)
+(Anthropic), primarily on Claude Opus 4.8. Development was overseen by the human
+author with attention to reliability and security. Architectural decisions,
+configuration choices, and development sessions were closely planned, directed,
+and verified by the human author throughout — including hardware bring-up and
+on-device testing beyond the LLM. Still, the code has had limited manual review;
+please make your own checks and use it at your own risk.
