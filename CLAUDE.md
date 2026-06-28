@@ -80,14 +80,17 @@ table → ±1, internal pullups). `g_encoderCount` is the running signed positio
 
 States: **IDLE → IDENTIFY → STIRRING → REVEAL**
 
-- **IDLE** — empty base. Shows "Place ingredients" + hint that holding the switch
-  toggles realm.
-- **IDENTIFY** — ≥1 bottle seated. Lists present ingredient name(s), prompts
-  "turn to stir".
+- **IDLE** — empty base. "Place ingredients" + the realm name (Skyrim / BG3) and
+  the hold-to-change-realm hint. The realm lives here, not on the identify screen.
+- **IDENTIFY** — ≥1 bottle seated. **Features** the ingredient name(s) in an
+  elegant serif with sparkles (a single ingredient large, two/three as a flanked
+  list); no realm header. A subtle "turn to stir" cue.
 - **STIRRING** — encoder is turning. Brewing trill rises with stir progress
-  (~320 Hz → ~1100 Hz); OLED swirl animation (ring of dim dots, one bright dot
-  orbiting, angle follows the encoder). Pitch + swirl decay when the knob goes
-  still, then settle back to IDENTIFY.
+  (~320 Hz → ~1100 Hz); a swirling vortex (twin arms + comet-tail mote + progress
+  arc) follows the encoder. If not yet armed, releasing the knob lets it settle
+  back to IDENTIFY. **Once armed** (progress ≥ ready level, "Press to brew"), the
+  brewing screen is held — releasing the knob no longer flicks back — until a
+  press or a real combo change.
 - **REVEAL** — shows the resulting potion name (wrap to two lines if wider than
   128px) with a short ascending success jingle.
 

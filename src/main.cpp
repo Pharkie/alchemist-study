@@ -315,10 +315,15 @@ static void updateStir(uint32_t now, uint32_t dt) {
 
   if (s_stirProgress >= STIR_READY_LEVEL) s_stirReady = true;
 
-  // Settle back to identify once the brew goes quiet. The brew was latched
-  // while stirring, so resync to whatever is actually on the base now (an
-  // emptied base drops to idle; bottles still present stay in identify).
-  if (g_state == ST_STIRRING && d == 0 && s_stirProgress <= 0.02f) {
+  if (s_stirReady) {
+    // Armed: hold the brewing screen lively until a press or a real combo
+    // change. Don't let releasing the knob flick back to the ingredient list,
+    // and keep the swirl from fully dying so it reads as "ready".
+    if (s_stirProgress < STIR_READY_LEVEL) s_stirProgress = STIR_READY_LEVEL;
+    if (g_state == ST_IDENTIFY) g_state = ST_STIRRING;
+  } else if (g_state == ST_STIRRING && d == 0 && s_stirProgress <= 0.02f) {
+    // Not armed and the swirl fizzled: settle back, resyncing to reality
+    // (an emptied base drops to idle; bottles still present stay in identify).
     if (s_sensedCombo != g_combo) enterCombo(s_sensedCombo);
     else g_state = ST_IDENTIFY;
   }
@@ -392,6 +397,40 @@ static void drawBrewPill(int y) {
   drawSparkle(bx + w + 15, y + 5, 1);
 }
 
+static void drawCornerSparkles(uint32_t now) {
+  int r = ((now / 300) & 1) ? 1 : 0;
+  drawSparkle(9, 10, r);  drawSparkle(118, 10, r);
+  drawSparkle(9, 53, r);  drawSparkle(118, 53, r);
+}
+
+// Draw `s` centered, in the largest of `fonts` that fits `budget`, on one line
+// (baseline y1) or two greedy lines (y2a/y2b). Falls back to the smallest font.
+static void drawFitted(const char* s, const uint8_t* const fonts[], int nf,
+                       int budget, int y1, int y2a, int y2b) {
+  for (int f = 0; f < nf; f++) {
+    oled.setFont(fonts[f]);
+    if (oled.getStrWidth(s) <= budget) { drawCenteredF(s, y1); return; }
+
+    char buf[48];
+    strncpy(buf, s, sizeof(buf) - 1);
+    buf[sizeof(buf) - 1] = '\0';
+    char l1[48] = "", l2[48] = "";
+    for (char* tok = strtok(buf, " "); tok; tok = strtok(nullptr, " ")) {
+      if (l2[0] == '\0') {
+        char trial[48];
+        strcpy(trial, l1);
+        if (l1[0]) strcat(trial, " ");
+        strcat(trial, tok);
+        if (oled.getStrWidth(trial) <= budget) { strcpy(l1, trial); continue; }
+      }
+      if (l2[0]) strcat(l2, " ");
+      strcat(l2, tok);
+    }
+    bool ok = oled.getStrWidth(l1) <= budget && oled.getStrWidth(l2) <= budget;
+    if (ok || f == nf - 1) { drawCenteredF(l1, y2a); drawCenteredF(l2, y2b); return; }
+  }
+}
+
 static void renderIdle(uint32_t now) {
   oled.clearBuffer();
   drawTwinkles(now);
@@ -414,36 +453,46 @@ static void renderIdle(uint32_t now) {
 
 static void renderIdentify(uint32_t now) {
   oled.clearBuffer();
+  drawCornerSparkles(now);
 
-  // Inverted header bar with the realm name.
-  oled.drawBox(0, 0, 128, 13);
-  oled.setDrawColor(0);
-  oled.setFont(u8g2_font_helvB08_tr);
-  oled.drawStr(5, 10, kUniverseName[g_universe]);
-  oled.setDrawColor(1);
+  int count = 0, first = -1;
+  for (int s = 0; s < 3; s++) if (g_combo & (1 << s)) { count++; if (first < 0) first = s; }
 
-  // Ingredient list with diamond bullets, vertically centred for the count.
-  int count = 0;
-  for (int s = 0; s < 3; s++) if (g_combo & (1 << s)) count++;
-  oled.setFont(u8g2_font_helvR08_tr);
-  int y = (count <= 1) ? 35 : (count == 2 ? 30 : 26);
-  for (int slot = 0; slot < 3; slot++) {
-    if (g_combo & (1 << slot)) {
-      drawDiamond(8, y - 3);
-      oled.drawStr(15, y, kIngredients[g_universe][slot]);
-      y += 12;
+  if (count == 1) {
+    // Feature the single ingredient large, with flanking sparkles.
+    static const uint8_t* const fonts[] = {
+      u8g2_font_ncenB14_tr, u8g2_font_ncenB12_tr, u8g2_font_ncenB10_tr
+    };
+    drawFitted(kIngredients[g_universe][first], fonts, 3, 110, 35, 29, 45);
+    int sr = ((now / 220) & 1) ? 2 : 1;
+    drawSparkle(7, 34, sr);
+    drawSparkle(121, 34, sr);
+  } else {
+    // Two or three ingredients: an elegant serif list, each flanked by a
+    // diamond, vertically centred for the count.
+    oled.setFont(u8g2_font_ncenB10_tr);
+    bool fits = true;
+    for (int s = 0; s < 3; s++)
+      if ((g_combo & (1 << s)) && oled.getStrWidth(kIngredients[g_universe][s]) > 104) fits = false;
+    if (!fits) oled.setFont(u8g2_font_helvB08_tr);
+
+    int y = (count == 2) ? 30 : 24;
+    for (int s = 0; s < 3; s++) {
+      if (g_combo & (1 << s)) {
+        const char* nm = kIngredients[g_universe][s];
+        int w = oled.getStrWidth(nm);
+        int x = (128 - w) / 2;
+        drawDiamond(x - 7, y - 3);
+        oled.drawStr(x, y, nm);
+        drawDiamond(x + w + 5, y - 3);
+        y += (count == 2) ? 16 : 13;
+      }
     }
   }
 
-  if (s_stirReady) {
-    drawBrewPill(53);
-  } else {
-    oled.setFont(u8g2_font_helvR08_tr);
-    char p[20] = "Turn to stir";
-    int dots = (int)((now / 400) % 4);
-    for (int i = 0; i < dots; i++) strcat(p, ".");
-    drawCenteredF(p, 61);
-  }
+  // A subtle stir cue (realm + gestures live on the idle screen).
+  oled.setFont(u8g2_font_5x8_tr);
+  drawCenteredF("turn to stir", 62);
   oled.sendBuffer();
 }
 
@@ -510,32 +559,10 @@ static void renderStirring(uint32_t now) {
 // Potion name in an elegant serif, scaled to the largest size that fits the
 // cartouche on one or two lines (falls back through smaller faces).
 static void drawPotionName(const char* name) {
-  const uint8_t* fonts[] = {
+  static const uint8_t* const fonts[] = {
     u8g2_font_ncenB14_tr, u8g2_font_ncenB12_tr, u8g2_font_ncenB10_tr
   };
-  const int budget = 112;
-  for (int f = 0; f < 3; f++) {
-    oled.setFont(fonts[f]);
-    if (oled.getStrWidth(name) <= budget) { drawCenteredF(name, 39); return; }
-
-    char buf[48];
-    strncpy(buf, name, sizeof(buf) - 1);
-    buf[sizeof(buf) - 1] = '\0';
-    char l1[48] = "", l2[48] = "";
-    for (char* tok = strtok(buf, " "); tok; tok = strtok(nullptr, " ")) {
-      if (l2[0] == '\0') {
-        char trial[48];
-        strcpy(trial, l1);
-        if (l1[0]) strcat(trial, " ");
-        strcat(trial, tok);
-        if (oled.getStrWidth(trial) <= budget) { strcpy(l1, trial); continue; }
-      }
-      if (l2[0]) strcat(l2, " ");
-      strcat(l2, tok);
-    }
-    bool ok = oled.getStrWidth(l1) <= budget && oled.getStrWidth(l2) <= budget;
-    if (ok || f == 2) { drawCenteredF(l1, 32); drawCenteredF(l2, 47); return; }
-  }
+  drawFitted(name, fonts, 3, 112, 39, 32, 47);
 }
 
 static void renderReveal(uint32_t now) {
