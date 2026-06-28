@@ -1,14 +1,55 @@
 # Alchemist Study
 
 Firmware for an **ESP32-C3 Super Mini** — the brain of a 3D-printed alchemist's
-study. Reed switches sense which potion bottles are seated in their homes, and an
-SSD1306 OLED names the resulting potion in one of two game universes (Skyrim /
-Baldur's Gate 3). A rotary encoder is the "stir" control; a passive buzzer scores
-the brewing.
+study. Magnetic potion bottles drop into fixed homes; **reed switches** sense
+which are present, and an **OLED** names the potion you've brewed — across **seven
+RPG universes**. A rotary encoder is the "stir" control and a passive buzzer
+scores the brewing.
 
 Built with PlatformIO + Arduino (arduino-esp32 **3.x** via the pioarduino platform).
+Runs fully offline — no WiFi, no accounts, no configuration.
 
-## Quick start
+## How it plays
+
+1. **Place ingredients** — seat 1–3 bottles; the screen features the ingredient name(s).
+2. **Stir** — turn the knob. A power bar fills (with diminishing returns toward the
+   top), a vortex swirls, and a trill rises in pitch. Pause and it drains gently.
+3. **Brew** — once the bar is full, press the knob: one of three random full-screen
+   animations reveals the potion, with a success jingle.
+4. **Settings** — press on the idle screen: **Realm**, **Mute**, **Brightness**,
+   **Stir Level** (Easy/Medium/Hard), **Hardware Test**, **Firmware**. Turn to move,
+   press to edit a value, turn to change, press to confirm. Settings persist (NVS).
+
+Three bottles give seven combinations (3 singles + 3 pairs + 1 triple) → seven
+potions per realm.
+
+## Realms
+
+**Skyrim · Baldur's Gate 3 · The Witcher 3 · World of Warcraft · Zelda ·
+Minecraft · Ultima VII** — each with three in-universe ingredients and seven
+potions. Full tables in [CLAUDE.md](CLAUDE.md).
+
+## Hardware
+
+- **Board:** ESP32-C3 Super Mini (native USB-CDC serial).
+- **Display:** SSD1306 128×64 OLED (I²C).
+- **Input:** 3× reed switch, rotary encoder with push button.
+- **Audio:** passive piezo buzzer (a *passive* one — active buzzers can't play the pitched audio).
+
+| Function | GPIO | Notes |
+|---|---|---|
+| Reed slot 1 / 2 / 3 | 3 / 4 / 10 | `INPUT_PULLUP`; magnet pulls LOW |
+| OLED SDA / SCL | 5 / 6 | I²C @ 400 kHz |
+| Buzzer | 1 | `tone()` (needs core 3.x) |
+| Encoder A / B / SW | 0 / 7 / 20 | SW `INPUT_PULLUP` |
+
+The encoder is decoded with a GPIO-interrupt routine in firmware — the ESP32-C3
+has no PCNT peripheral, so the usual `ESP32Encoder` library can't be used. See
+[CLAUDE.md](CLAUDE.md) for the full pin map and the platform rationale.
+
+## Build & flash
+
+Requires **PlatformIO Core ≥ 6.1.19** (the pinned pioarduino platform needs it).
 
 ```sh
 pio run                       # build (default env: c3-prod)
@@ -16,60 +57,49 @@ pio run -e c3-dev -t upload   # flash dev build (verbose logs)
 pio device monitor -b 115200  # serial monitor over USB-CDC
 ```
 
-### Hardware check
-
-A standalone wiring diagnostic lives in `src/hwcheck.cpp` (its own build env):
-
-```sh
-pio run -e c3-hwcheck -t upload   # flash the hardware checker
-pio device monitor -b 115200      # then trigger each component
-```
-
-It beeps the buzzer, scans for the OLED, and shows a **live status screen** (each
-reed/button as an ON/off box + encoder count) while logging every edge to serial.
-Full guide: **[docs/HARDWARE_TEST.md](docs/HARDWARE_TEST.md)**.
-
-The real firmware also self-checks on boot: it plays a rising chime, prints a
-pin-map report, and if the OLED is absent it runs headless, beeps an error
-triple, and nags over serial rather than failing silently.
-
-> Requires **PlatformIO Core ≥ 6.1.19** (the pinned pioarduino platform needs it).
-
-No configuration or credentials are needed — the bench firmware runs fully offline.
-
-## Layout
-
-| Path                  | Purpose                                              |
-|-----------------------|------------------------------------------------------|
-| `platformio.ini`      | Build envs: `c3-prod` (default), `c3-dev`, `c3-hwcheck` |
-| `src/main.cpp`        | Single-file firmware: state machine, potions, audio  |
-| `src/hwcheck.cpp`     | Standalone hardware diagnostic (built by `c3-hwcheck`) |
-| `CLAUDE.md`           | Full spec: pin map, platform rationale, potion tables |
-| `BACKLOG.md`          | Phased build plan                                    |
-| `docs/HARDWARE_TEST.md` | How to run the hardware checker + troubleshooting  |
-| `docs/TUNING.md`      | The tunable feel constants (stir, audio, timing)     |
-| `lib/` `include/`     | Project-private libs / shared headers                |
-| `test/`               | Unity tests                                          |
-
-## Build environments
-
 | Env | Builds | Use |
 |---|---|---|
-| `c3-prod` | `main.cpp` (optimised) | default release build |
-| `c3-dev`  | `main.cpp` (verbose, exception decoder) | day-to-day flashing |
+| `c3-prod` | `main.cpp` (optimised) | release build |
+| `c3-dev` | `main.cpp` (verbose, exception decoder) | day-to-day flashing |
 | `c3-hwcheck` | `hwcheck.cpp` | wiring / component diagnostics |
 
-## Hardware
+The real firmware **self-checks on boot**: a rising chime, a pin-map report, and
+if the OLED is missing it runs headless (error beep + serial warning) rather than
+failing silently.
 
-- **Target:** ESP32-C3 Super Mini, native USB (USB-CDC serial).
-- **Platform:** pioarduino `55.03.39` (core 3.3.9) — required for `tone()` and the
-  software encoder decode. See `CLAUDE.md` for the full pin map and the why.
-- **Encoder:** decoded via GPIO interrupts in firmware (the C3 has no PCNT
-  peripheral, so `ESP32Encoder` can't be used).
+## Hardware check
+
+A standalone wiring diagnostic — beeps the buzzer, scans for the OLED, and shows a
+live ON/off status screen for every input while logging both edges to serial:
+
+```sh
+pio run -e c3-hwcheck -t upload
+pio device monitor -b 115200
+```
+
+Full guide + troubleshooting: **[docs/HARDWARE_TEST.md](docs/HARDWARE_TEST.md)**.
+The same diagnostic is also reachable in-firmware via **Settings → Hardware Test**.
+
+## Repo layout
+
+| Path | Purpose |
+|---|---|
+| `src/main.cpp` | The firmware: state machine, realms, stir/brew, menu, animations |
+| `src/hwcheck.cpp` | Standalone hardware diagnostic (`c3-hwcheck`) |
+| `platformio.ini` | Build environments |
+| `CLAUDE.md` | Full spec: pin map, platform rationale, all realm tables |
+| `docs/HARDWARE_TEST.md` | Running the hardware checker + troubleshooting |
+| `docs/TUNING.md` | Tunable feel constants (stir curve, audio, timing) |
+| `BACKLOG.md` | Phased build plan |
+
+## Versioning
+
+`FW_VERSION` in `src/main.cpp` tracks the git tag / GitHub release. Current: **v0.1**.
 
 ## Roadmap
 
-1. **Bench firmware (WiFi-free)** — the potion logic, built to work standalone.
-2. **Connectivity (later)** — runtime WiFi provisioning, OTA, status page, Home
-   Assistant integration. The C3's radio stays available; we just add it after the
-   magic works on the bench. See `BACKLOG.md`.
+1. **Bench firmware (offline)** — the potion experience, standalone. ✅ (v0.1)
+2. **Connectivity (later)** — runtime WiFi provisioning, OTA updates, a status
+   page, and Home Assistant integration (e.g. announce a brew as an event). The
+   C3's radio stays available; it's added once the magic works on the bench. See
+   [BACKLOG.md](BACKLOG.md).
