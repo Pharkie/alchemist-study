@@ -106,10 +106,9 @@ static constexpr uint32_t REED_DEBOUNCE_MS  = 40;
 static constexpr uint32_t LONG_PRESS_MS     = 600;   // hold = toggle universe
 static constexpr uint32_t BTN_DEBOUNCE_MS   = 30;
 static constexpr uint32_t RENDER_INTERVAL_MS = 33;   // ~30 fps display cap
-static constexpr float    STIR_GAIN         = 0.045f; // progress per |count|
-static constexpr float    STIR_DECAY_PER_MS = 0.0008f; // progress lost per ms idle
-static constexpr float    STIR_ANGLE_STEP   = 0.18f;  // swirl radians per count
-static constexpr float    STIR_READY_LEVEL  = 0.5f;   // progress needed to brew
+static constexpr uint32_t STIR_IDLE_RESET_MS = 500;  // pause longer than this -> bar resets to 0
+static constexpr uint32_t STIR_IDLE_BACK_MS  = 2500; // ...and after this, return to identify
+static constexpr float    STIR_ANGLE_STEP   = 0.18f;  // swirl radians per encoder count
 static constexpr uint16_t PITCH_MIN_HZ      = 320;
 static constexpr uint16_t PITCH_MAX_HZ      = 1100;
 static constexpr int32_t  ENC_STEP          = 4;     // encoder counts per menu/select step
@@ -131,6 +130,7 @@ static Universe g_universe = UNI_SKYRIM;
 // Persisted settings + UI cursors.
 static bool     g_mute       = false;
 static uint8_t  g_brightness = 3;          // 1..5
+static uint8_t  g_stirTimeIdx = 1;         // index into kStirSecs (default 3s)
 static int      s_menuIdx    = 0;          // highlighted settings item
 static int32_t  s_navAccum   = 0;          // encoder accumulator for discrete steps
 
@@ -142,10 +142,11 @@ static bool     s_baseEmptied  = false; // base cleared since the brew latched
 
 // encoder / stir model
 static int32_t s_lastEncoder = 0;
-static float   s_stirProgress = 0.0f;      // 0..1, decays when idle
+static float   s_stirProgress = 0.0f;      // 0..1 power bar (time-based fill)
 static float   s_swirlAngle   = 0.0f;      // radians, follows the encoder
-static bool    s_stirReady    = false;     // latched once progress crosses level
+static bool    s_stirReady    = false;     // latched once the bar fills
 static uint32_t s_revealMs    = 0;         // when REVEAL began (drives the burst)
+static uint32_t s_lastStirMs  = 0;         // last time the knob actually moved
 
 // button
 static bool     s_btnDown   = false;
@@ -273,6 +274,11 @@ static void onSensedComboChange() {
 // ---- Settings model (reusable mini-menu) -------------------------------
 static const char* const kOnOff[] = { "Off", "On" };
 
+// Stir time: seconds of stirring needed to fill the power bar.
+static const int          kStirSecs[]   = { 1, 3, 5, 8 };
+static const char* const  kStirLabels[] = { "1s", "3s", "5s", "8s" };
+static constexpr int      kStirN        = 4;
+
 static void applyBrightness() {
   if (g_haveDisplay) oled.setContrast((uint8_t)map(g_brightness, 1, 5, 16, 255));
 }
@@ -286,6 +292,8 @@ static void setMute(int v)   { g_mute = (v != 0); prefs.putUChar("mute", g_mute 
 static int  getBright()      { return g_brightness; }
 static void setBright(int v) { g_brightness = (uint8_t)v; prefs.putUChar("bright", g_brightness);
                                applyBrightness(); }
+static int  getStirTime()    { return g_stirTimeIdx; }
+static void setStirTime(int v){ g_stirTimeIdx = (uint8_t)v; prefs.putUChar("stirt", g_stirTimeIdx); }
 
 static void settingsEnter() { g_state = ST_SETTINGS; s_menuIdx = 0; s_navAccum = 0; }
 static void settingsExit()  { g_state = ST_IDLE;     s_navAccum = 0; }
@@ -307,7 +315,8 @@ struct MenuItem {
 static const MenuItem kMenu[] = {
   { "Realm",        K_CHOICE, getRealm,  setRealm,  kUniverseName, UNI_COUNT, 0, 0, nullptr,    nullptr      },
   { "Mute",         K_CHOICE, getMute,   setMute,   kOnOff,        2,         0, 0, nullptr,    nullptr      },
-  { "Bright",       K_RANGE,  getBright, setBright, nullptr,       0,         1, 5, nullptr,    nullptr      },
+  { "Bright",       K_RANGE,  getBright,   setBright,   nullptr,     0,      1, 5, nullptr,    nullptr      },
+  { "Stir Time",    K_CHOICE, getStirTime, setStirTime, kStirLabels, kStirN, 0, 0, nullptr,    nullptr      },
   { "Hardware Test",K_ACTION, nullptr,   nullptr,   nullptr,       0,         0, 0, nullptr,    diagEnter    },
   { "Firmware",     K_INFO,   nullptr,   nullptr,   nullptr,       0,         0, 0, FW_VERSION, nullptr      },
   { "Exit",         K_ACTION, nullptr,   nullptr,   nullptr,       0,         0, 0, nullptr,    settingsExit },
@@ -395,31 +404,30 @@ static void updateStir(uint32_t now, uint32_t dt, int32_t d) {
   // Stir only matters in identify/stirring (loop dispatches the delta by state).
   if (g_state != ST_IDENTIFY && g_state != ST_STIRRING) return;
 
-  // Continuous decay; turning the knob adds faster than it bleeds off.
-  s_stirProgress -= STIR_DECAY_PER_MS * (float)dt;
-  if (s_stirProgress < 0.0f) s_stirProgress = 0.0f;
-
+  // Any knob motion = actively stirring; it also spins the swirl.
   if (d != 0) {
-    int32_t ad = (d < 0) ? -d : d;
-    s_stirProgress += STIR_GAIN * (float)ad;
-    if (s_stirProgress > 1.0f) s_stirProgress = 1.0f;
+    s_lastStirMs = now;
     s_swirlAngle += STIR_ANGLE_STEP * (float)d;
     if (g_state == ST_IDENTIFY) g_state = ST_STIRRING;
   }
 
-  if (s_stirProgress >= STIR_READY_LEVEL) s_stirReady = true;
+  if (s_stirReady) return;          // armed: hold the full bar until press/combo change
+  if (g_state != ST_STIRRING) return;
 
-  if (s_stirReady) {
-    // Armed: hold the brewing screen lively until a press or a real combo
-    // change. Don't let releasing the knob flick back to the ingredient list,
-    // and keep the swirl from fully dying so it reads as "ready".
-    if (s_stirProgress < STIR_READY_LEVEL) s_stirProgress = STIR_READY_LEVEL;
-    if (g_state == ST_IDENTIFY) g_state = ST_STIRRING;
-  } else if (g_state == ST_STIRRING && d == 0 && s_stirProgress <= 0.02f) {
-    // Not armed and the swirl fizzled: settle back, resyncing to reality
-    // (an emptied base drops to idle; bottles still present stay in identify).
-    if (s_sensedCombo != g_combo) enterCombo(s_sensedCombo);
-    else g_state = ST_IDENTIFY;
+  uint32_t idle = now - s_lastStirMs;
+  if (idle < STIR_IDLE_RESET_MS) {
+    // Fill the power bar over the configured stir time of active stirring.
+    float secs = (float)kStirSecs[g_stirTimeIdx];
+    s_stirProgress += (float)dt / (secs * 1000.0f);
+    if (s_stirProgress >= 1.0f) { s_stirProgress = 1.0f; s_stirReady = true; }
+  } else {
+    // Paused too long: empty the bar but stay at the cauldron...
+    s_stirProgress = 0.0f;
+    // ...and only after a longer idle drift back to the ingredient screen.
+    if (idle >= STIR_IDLE_BACK_MS) {
+      if (s_sensedCombo != g_combo) enterCombo(s_sensedCombo);
+      else g_state = ST_IDENTIFY;
+    }
   }
 }
 
@@ -591,8 +599,8 @@ static void renderIdentify(uint32_t now) {
 
 static void renderStirring(uint32_t now) {
   oled.clearBuffer();
-  const int cx = 64, cy = 31;
-  const int Rout = 22;
+  const int cx = 64, cy = 23;
+  const int Rout = 16;
 
   oled.setFont(u8g2_font_helvR08_tr);
   drawCenteredF("- brewing -", 8);
@@ -605,10 +613,10 @@ static void renderStirring(uint32_t now) {
   }
 
   // Twin spiral arms swirling with the knob; reach grows with progress.
-  float reach = 14.0f + s_stirProgress * 6.0f;
+  float reach = 9.0f + s_stirProgress * 6.0f;
   for (int arm = 0; arm < 2; arm++) {
     float base = s_swirlAngle + arm * (float)M_PI;
-    for (float t = 0.0f; t < 3.0f; t += 0.22f) {
+    for (float t = 0.0f; t < 3.0f; t += 0.25f) {
       float r = 3.0f + (t / 3.0f) * reach;
       float a = base + t * 1.7f;
       oled.drawPixel(cx + (int)lroundf(r * cosf(a)), cy + (int)lroundf(r * sinf(a)));
@@ -625,15 +633,6 @@ static void renderStirring(uint32_t now) {
     else             oled.drawPixel(x, yy);
   }
 
-  // Progress arc sweeping clockwise from the top.
-  const int Rarc = 27;
-  int seg = (int)(s_stirProgress * 46.0f);
-  for (int i = 0; i < seg; i++) {
-    float a = -(float)M_PI / 2.0f + (float)i * (2.0f * (float)M_PI / 46.0f);
-    oled.drawPixel(cx + (int)lroundf(Rarc * cosf(a)), cy + (int)lroundf(Rarc * sinf(a)));
-  }
-
-  // When ready: sparkles flare around the rim + the brew pill.
   if (s_stirReady) {
     for (int i = 0; i < 3; i++) {
       float a = s_swirlAngle * 0.5f + i * 2.094f;
@@ -641,10 +640,19 @@ static void renderStirring(uint32_t now) {
       int yy = cy + (int)lroundf((Rout + 4) * sinf(a));
       drawSparkle(x, yy, ((now / 150 + i) & 1) ? 1 : 2);
     }
-    drawBrewPill(53);
+  }
+
+  // Power bar — fills over the configured stir time; empties if you pause.
+  const int bx = 14, by = 41, bw = 100, bh = 10;
+  oled.drawFrame(bx, by, bw, bh);
+  int fill = (int)lroundf((float)(bw - 4) * s_stirProgress);
+  if (fill > 0) oled.drawBox(bx + 2, by + 2, fill, bh - 4);
+
+  if (s_stirReady) {
+    drawBrewPill(52);
   } else {
-    oled.setFont(u8g2_font_helvR08_tr);
-    drawCenteredF("keep stirring", 61);
+    oled.setFont(u8g2_font_5x8_tr);
+    drawCenteredF("keep stirring", 62);
   }
   oled.sendBuffer();
 }
@@ -802,6 +810,8 @@ void setup() {
   g_brightness = prefs.getUChar("bright", 3);
   if (g_brightness < 1) g_brightness = 1;
   if (g_brightness > 5) g_brightness = 5;
+  g_stirTimeIdx = prefs.getUChar("stirt", 1);
+  if (g_stirTimeIdx >= kStirN) g_stirTimeIdx = 1;
 
   // Boot chime: a rising two-note "awake" signal (also a buzzer test).
   if (!g_mute) {

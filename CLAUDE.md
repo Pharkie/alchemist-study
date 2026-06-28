@@ -85,12 +85,12 @@ States: **IDLE → IDENTIFY → STIRRING → REVEAL**
 - **IDENTIFY** — ≥1 bottle seated. **Features** the ingredient name(s) in an
   elegant serif with sparkles (a single ingredient large, two/three as a flanked
   list); no realm header. A subtle "turn to stir" cue.
-- **STIRRING** — encoder is turning. Brewing trill rises with stir progress
-  (~320 Hz → ~1100 Hz); a swirling vortex (twin arms + comet-tail mote + progress
-  arc) follows the encoder. If not yet armed, releasing the knob lets it settle
-  back to IDENTIFY. **Once armed** (progress ≥ ready level, "Press to brew"), the
-  brewing screen is held — releasing the knob no longer flicks back — until a
-  press or a real combo change.
+- **STIRRING** — encoder is turning. A **power bar** fills over the configured
+  **Stir Time** (1/3/5/8 s, a setting) of active stirring, with a swirling vortex
+  + rising trill (~320→1100 Hz). **Pause >0.5 s and the bar resets to zero** but
+  you stay at the cauldron; a longer idle (~2.5 s) drifts back to IDENTIFY. When
+  the bar fills it **arms** ("Press to brew") and holds until a press or a real
+  combo change.
 - **REVEAL** — shows the resulting potion name (wrap to two lines if wider than
   128px) with a short ascending success jingle.
 

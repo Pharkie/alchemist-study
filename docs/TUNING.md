@@ -7,17 +7,19 @@ under `// ---- Tunables` near the top of `src/main.cpp`. Edit, then reflash:
 pio run -e c3-dev -t upload
 ```
 
-## Stir model
+## Stir model (time-based)
+
+The power bar fills over **Stir Time** seconds of *active* stirring (Stir Time is
+a runtime setting: 1/3/5/8 s — `kStirSecs` in `main.cpp`). Pause longer than
+`STIR_IDLE_RESET_MS` and the bar resets to zero (you stay on the brewing screen);
+after `STIR_IDLE_BACK_MS` it drifts back to identify. When the bar fills it arms
+("Press to brew") and holds until a press or a real combo change.
 
 | Constant | Default | Effect |
 |---|---|---|
-| `STIR_GAIN` | `0.045` | Progress added per encoder count. **Higher = fewer turns to arm** "Press to brew". |
-| `STIR_DECAY_PER_MS` | `0.0008` | Progress bled off per ms when idle. **Higher = fades faster** when you stop stirring. |
-| `STIR_READY_LEVEL` | `0.5` | Progress (0–1) needed before a press will reveal. **Higher = must stir more.** |
-| `STIR_ANGLE_STEP` | `0.18` | Radians the swirl mote moves per encoder count (visual speed only). |
-
-If arming feels too hard/easy, change `STIR_GAIN` first. If it "cools" too
-quickly while you reach for the button, lower `STIR_DECAY_PER_MS`.
+| `STIR_IDLE_RESET_MS` | `500` | Pause longer than this → the bar empties to zero. |
+| `STIR_IDLE_BACK_MS` | `2500` | Idle longer than this (bar empty) → return to identify. |
+| `STIR_ANGLE_STEP` | `0.18` | Radians the swirl mote moves per encoder count (visual only). |
 
 ## Audio (needs a passive buzzer)
 
@@ -42,8 +44,8 @@ Melodies (success jingle, realm-toggle beep, "not ready" buzz) are the
 ## Settings menu
 
 Runtime settings live in the on-device **Settings** menu (press the knob on the
-idle screen): **Realm**, **Mute**, **Brightness** (1–5), **Hardware Test**,
-**Firmware**, **Exit**. Mute, brightness, and realm persist to NVS. The menu is a
+idle screen): **Realm**, **Mute**, **Brightness** (1–5), **Stir Time** (1/3/5/8 s),
+**Hardware Test**, **Firmware**, **Exit**. Mute, brightness, and realm persist to NVS. The menu is a
 data table (`kMenu` in `main.cpp`) — add an item by appending one row
 (`{label, kind, get, set, …}`); kinds are choice / range / info / action.
 
