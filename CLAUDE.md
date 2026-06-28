@@ -117,7 +117,8 @@ Open with a press on the idle screen; turn to move, press to change/activate,
 long-press (or **Exit**) to leave. Items are a data table (`kMenu` in
 `main.cpp`) of `{label, kind, get/set, …}`, so adding one is a single row.
 
-- **Realm** — Skyrim / Baldur's Gate 3 (persisted; replaces the old long-press)
+- **Realm** — 7 universes: Skyrim, Baldur's Gate 3, The Witcher 3, World of
+  Warcraft, Zelda, Minecraft, Ultima VII (persisted; replaces the old long-press)
 - **Mute** — Off / On (gates all audio: chime, trill, jingles, error beep)
 - **Bright** — 1–5 (OLED contrast via `setContrast`)
 - **Hardware Test** — opens a built-in live diagnostic (`ST_DIAG`): reed/button
@@ -155,6 +156,66 @@ Slots per universe: bit0=slot1, bit1=slot2, bit2=slot3.
 | 101   | Mugwort + Morsel         | Potion of Invisibility          |
 | 110   | Crayfish + Morsel        | Elixir of Heroism               |
 | 111   | all                      | Elixir of Universal Resistance  |
+
+**The Witcher 3** — Celandine / Drowner Brain / Dwarven Spirit
+
+| Combo | Ingredients                  | Potion                     |
+|-------|------------------------------|----------------------------|
+| 001   | Celandine                    | White Honey                |
+| 010   | Drowner Brain                | Black Blood                |
+| 100   | Dwarven Spirit               | Tawny Owl                  |
+| 011   | Celandine + Drowner Brain    | Full Moon                  |
+| 101   | Celandine + Dwarven Spirit   | White Raffard's Decoction  |
+| 110   | Drowner Brain + Dwarven Spirit | Ekimmara Decoction       |
+| 111   | all                          | Swallow                    |
+
+**World of Warcraft** — Peacebloom / Silverleaf / Earthroot
+
+| Combo | Ingredients              | Potion                     |
+|-------|--------------------------|----------------------------|
+| 001   | Peacebloom               | Minor Rejuvenation Potion  |
+| 010   | Silverleaf               | Elixir of Minor Defense    |
+| 100   | Earthroot                | Elixir of Minor Fortitude  |
+| 011   | Peacebloom + Silverleaf  | Minor Healing Potion       |
+| 101   | Peacebloom + Earthroot   | Weak Troll's Blood Potion  |
+| 110   | Silverleaf + Earthroot   | Elixir of Lion's Strength  |
+| 111   | all                      | Flask of the Titans        |
+
+**Zelda (classic)** — Mushroom / Bottled Fairy / Lon Lon Milk
+
+| Combo | Ingredients              | Potion          |
+|-------|--------------------------|-----------------|
+| 001   | Mushroom                 | Green Potion    |
+| 010   | Bottled Fairy            | Red Potion      |
+| 100   | Lon Lon Milk             | Lon Lon Milk    |
+| 011   | Mushroom + Fairy         | Blue Potion     |
+| 101   | Mushroom + Milk          | Elixir Soup     |
+| 110   | Fairy + Milk             | Life Potion     |
+| 111   | all                      | Chateau Romani  |
+
+**Minecraft** — Nether Wart / Glistering Melon Slice / Blaze Powder
+
+| Combo | Ingredients              | Potion                     |
+|-------|--------------------------|----------------------------|
+| 001   | Nether Wart              | Awkward Potion             |
+| 010   | Glistering Melon Slice   | Potion of Healing          |
+| 100   | Blaze Powder             | Potion of Strength         |
+| 011   | Wart + Melon             | Potion of Regeneration     |
+| 101   | Wart + Blaze Powder      | Potion of Swiftness        |
+| 110   | Melon + Blaze Powder     | Potion of Fire Resistance  |
+| 111   | all                      | Potion of Harming          |
+
+**Ultima VII** — Garlic / Ginseng / Spider Silk
+
+| Combo | Ingredients              | Potion        |
+|-------|--------------------------|---------------|
+| 001   | Garlic                   | Cure Poison   |
+| 010   | Ginseng                  | Mana Potion   |
+| 100   | Spider Silk              | Sleep         |
+| 011   | Garlic + Ginseng         | Awaken        |
+| 101   | Garlic + Spider Silk     | Protection    |
+| 110   | Ginseng + Spider Silk    | Invisibility  |
+| 111   | all                      | Heal          |
 
 ## Conventions
 

@@ -69,36 +69,75 @@ static void IRAM_ATTR encoderISR() {
 // ---- Potion data -------------------------------------------------------
 // Two universes. Ingredient slots map to combo bits: slot1=bit0, slot2=bit1,
 // slot3=bit2. Potion tables are indexed by the combo value 1..7 ([0] unused).
-enum Universe { UNI_SKYRIM = 0, UNI_BG3 = 1, UNI_COUNT = 2 };
+enum Universe {
+  UNI_SKYRIM = 0,
+  UNI_BG3,
+  UNI_WITCHER,
+  UNI_WOW,
+  UNI_ZELDA,
+  UNI_MINECRAFT,
+  UNI_ULTIMA,
+  UNI_COUNT
+};
 
 static const char* const kUniverseName[UNI_COUNT] = {
-  "Skyrim", "Baldur's Gate 3"
+  "Skyrim",
+  "Baldur's Gate 3",
+  "The Witcher 3",
+  "World of Warcraft",
+  "Zelda",
+  "Minecraft",
+  "Ultima VII"
 };
 
 static const char* const kIngredients[UNI_COUNT][3] = {
-  { "Blue Mountain Flower", "Deathbell", "Nightshade" },
-  { "Salts of Mugwort", "Bullywug Crayfish Tail", "Rogue's Morsel" }
+  { "Blue Mountain Flower", "Deathbell", "Nightshade" },           // Skyrim
+  { "Salts of Mugwort", "Bullywug Crayfish Tail", "Rogue's Morsel" }, // Baldur's Gate 3
+  { "Celandine", "Drowner Brain", "Dwarven Spirit" },             // The Witcher 3
+  { "Peacebloom", "Silverleaf", "Earthroot" },                    // World of Warcraft
+  { "Mushroom", "Bottled Fairy", "Lon Lon Milk" },                // Zelda (classic)
+  { "Nether Wart", "Glistering Melon Slice", "Blaze Powder" },     // Minecraft
+  { "Garlic", "Ginseng", "Spider Silk" }                          // Ultima VII
 };
 
+// Indexed by combo value 1..7 ([0] unused). Combo bits: slot1=1, slot2=2,
+// slot3=4 -> [1]=s1, [2]=s2, [3]=s1+s2, [4]=s3, [5]=s1+s3, [6]=s2+s3, [7]=all.
 static const char* const kPotions[UNI_COUNT][8] = {
-  // Skyrim
+  // Skyrim — Blue Mountain Flower / Deathbell / Nightshade
   { "",
-    "Potion of Minor Healing",   // 001 Flower
-    "Damage Health Poison",      // 010 Deathbell
-    "Lingering Damage Poison",   // 011 Flower+Deathbell
-    "Fortify Destruction",       // 100 Nightshade
-    "Potion of Regeneration",    // 101 Flower+Nightshade
-    "Deadly Paralysis Poison",   // 110 Deathbell+Nightshade
-    "Philter of the Phantom" },  // 111 all
-  // Baldur's Gate 3
+    "Potion of Minor Healing", "Damage Health Poison", "Lingering Damage Poison",
+    "Fortify Destruction", "Potion of Regeneration", "Deadly Paralysis Poison",
+    "Philter of the Phantom" },
+  // Baldur's Gate 3 — Mugwort / Crayfish / Morsel
   { "",
-    "Potion of Healing",             // 001 Mugwort
-    "Elixir of Vigilance",           // 010 Crayfish
-    "Elixir of the Colossus",        // 011 Mugwort+Crayfish
-    "Potion of Speed",               // 100 Morsel
-    "Potion of Invisibility",        // 101 Mugwort+Morsel
-    "Elixir of Heroism",             // 110 Crayfish+Morsel
-    "Elixir of Universal Resistance" } // 111 all
+    "Potion of Healing", "Elixir of Vigilance", "Elixir of the Colossus",
+    "Potion of Speed", "Potion of Invisibility", "Elixir of Heroism",
+    "Elixir of Universal Resistance" },
+  // The Witcher 3 — Celandine / Drowner Brain / Dwarven Spirit
+  { "",
+    "White Honey", "Black Blood", "Full Moon",
+    "Tawny Owl", "White Raffard's Decoction", "Ekimmara Decoction",
+    "Swallow" },
+  // World of Warcraft — Peacebloom / Silverleaf / Earthroot
+  { "",
+    "Minor Rejuvenation Potion", "Elixir of Minor Defense", "Minor Healing Potion",
+    "Elixir of Minor Fortitude", "Weak Troll's Blood Potion", "Elixir of Lion's Strength",
+    "Flask of the Titans" },
+  // Zelda (classic) — Mushroom / Bottled Fairy / Lon Lon Milk
+  { "",
+    "Green Potion", "Red Potion", "Blue Potion",
+    "Lon Lon Milk", "Elixir Soup", "Life Potion",
+    "Chateau Romani" },
+  // Minecraft — Nether Wart / Glistering Melon Slice / Blaze Powder
+  { "",
+    "Awkward Potion", "Potion of Healing", "Potion of Regeneration",
+    "Potion of Strength", "Potion of Swiftness", "Potion of Fire Resistance",
+    "Potion of Harming" },
+  // Ultima VII — Garlic / Ginseng / Spider Silk
+  { "",
+    "Cure Poison", "Mana Potion", "Awaken",
+    "Sleep", "Protection", "Invisibility",
+    "Heal" }
 };
 
 // ---- Tunables (revisit on the bench in Phase 6) ------------------------
@@ -113,7 +152,7 @@ static constexpr uint16_t PITCH_MIN_HZ      = 320;
 static constexpr uint16_t PITCH_MAX_HZ      = 1100;
 static constexpr int32_t  ENC_STEP          = 4;     // encoder counts per menu/select step
 
-#define FW_VERSION "v0.4"
+#define FW_VERSION "v0.5"
 
 // ---- Hardware objects --------------------------------------------------
 // Full-buffer (_F_) SSD1306 over hardware I2C.
@@ -806,6 +845,7 @@ void setup() {
   // ---- Load persisted settings (before the chime, so Mute is honored) ----
   prefs.begin("alchemy", false);
   g_universe   = (Universe)prefs.getUChar("universe", UNI_SKYRIM);
+  if (g_universe >= UNI_COUNT) g_universe = UNI_SKYRIM;
   g_mute       = prefs.getUChar("mute", 0) != 0;
   g_brightness = prefs.getUChar("bright", 3);
   if (g_brightness < 1) g_brightness = 1;
