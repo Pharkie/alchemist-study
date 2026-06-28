@@ -25,12 +25,13 @@ pio run -e c3-hwcheck -t upload   # flash the hardware checker
 pio device monitor -b 115200      # then trigger each component
 ```
 
-It beeps the buzzer, scans for the OLED and draws a test pattern, and — as
-you trigger each reed / press the button / turn the knob — names the GPIO that
-reacts, flagging any pin that *shouldn't* be wired (catches silkscreen/breakout
-mismatches). The real firmware also self-checks on boot: it plays a rising
-chime, prints a pin-map report, and if the OLED is absent it runs headless,
-beeps an error triple, and nags over serial rather than failing silently.
+It beeps the buzzer, scans for the OLED, and shows a **live status screen** (each
+reed/button as an ON/off box + encoder count) while logging every edge to serial.
+Full guide: **[docs/HARDWARE_TEST.md](docs/HARDWARE_TEST.md)**.
+
+The real firmware also self-checks on boot: it plays a rising chime, prints a
+pin-map report, and if the OLED is absent it runs headless, beeps an error
+triple, and nags over serial rather than failing silently.
 
 > Requires **PlatformIO Core ≥ 6.1.19** (the pinned pioarduino platform needs it).
 
@@ -38,14 +39,25 @@ No configuration or credentials are needed — the bench firmware runs fully off
 
 ## Layout
 
-| Path                | Purpose                                              |
-|---------------------|------------------------------------------------------|
-| `platformio.ini`    | Build envs: `c3-prod` (default), `c3-dev`            |
-| `src/main.cpp`      | Single-file firmware: state machine, potions, audio  |
-| `CLAUDE.md`         | Full spec: pin map, platform rationale, potion tables |
-| `BACKLOG.md`        | Phased build plan                                    |
-| `lib/` `include/`   | Project-private libs / shared headers                |
-| `test/`             | Unity tests                                          |
+| Path                  | Purpose                                              |
+|-----------------------|------------------------------------------------------|
+| `platformio.ini`      | Build envs: `c3-prod` (default), `c3-dev`, `c3-hwcheck` |
+| `src/main.cpp`        | Single-file firmware: state machine, potions, audio  |
+| `src/hwcheck.cpp`     | Standalone hardware diagnostic (built by `c3-hwcheck`) |
+| `CLAUDE.md`           | Full spec: pin map, platform rationale, potion tables |
+| `BACKLOG.md`          | Phased build plan                                    |
+| `docs/HARDWARE_TEST.md` | How to run the hardware checker + troubleshooting  |
+| `docs/TUNING.md`      | The tunable feel constants (stir, audio, timing)     |
+| `lib/` `include/`     | Project-private libs / shared headers                |
+| `test/`               | Unity tests                                          |
+
+## Build environments
+
+| Env | Builds | Use |
+|---|---|---|
+| `c3-prod` | `main.cpp` (optimised) | default release build |
+| `c3-dev`  | `main.cpp` (verbose, exception decoder) | day-to-day flashing |
+| `c3-hwcheck` | `hwcheck.cpp` | wiring / component diagnostics |
 
 ## Hardware
 
