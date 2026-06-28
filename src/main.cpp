@@ -444,10 +444,9 @@ static void renderIdle(uint32_t now) {
   oled.drawHLine(28, 51, 72);
   drawDiamond(22, 51); drawDiamond(106, 51);
 
-  // Bottom caption gently alternates the realm and the hidden gesture.
-  oled.setFont(u8g2_font_helvR08_tr);
-  bool hint = ((now / 2600) & 1);
-  drawCenteredF(hint ? "hold knob - change realm" : kUniverseName[g_universe], 61);
+  // Just the realm — gesture instructions live off-screen (docs).
+  oled.setFont(u8g2_font_helvB08_tr);
+  drawCenteredF(kUniverseName[g_universe], 61);
   oled.sendBuffer();
 }
 
