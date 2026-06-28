@@ -145,8 +145,9 @@ static constexpr uint32_t REED_DEBOUNCE_MS  = 40;
 static constexpr uint32_t LONG_PRESS_MS     = 600;   // hold = toggle universe
 static constexpr uint32_t BTN_DEBOUNCE_MS   = 30;
 static constexpr uint32_t RENDER_INTERVAL_MS = 33;   // ~30 fps display cap
-static constexpr uint32_t STIR_IDLE_RESET_MS = 500;  // pause longer than this -> bar resets to 0
-static constexpr uint32_t STIR_IDLE_BACK_MS  = 2500; // ...and after this, return to identify
+static constexpr uint32_t STIR_ACTIVE_MS     = 150;  // motion within this = still stirring (filling)
+static constexpr float    STIR_DECAY_PER_S   = 0.20f; // bar drains 20%/sec while paused (not a reset)
+static constexpr uint32_t STIR_IDLE_BACK_MS  = 2500; // empty + idle this long -> return to identify
 static constexpr float    STIR_ANGLE_STEP   = 0.18f;  // swirl radians per encoder count
 static constexpr uint16_t PITCH_MIN_HZ      = 320;
 static constexpr uint16_t PITCH_MAX_HZ      = 1100;
@@ -454,16 +455,18 @@ static void updateStir(uint32_t now, uint32_t dt, int32_t d) {
   if (g_state != ST_STIRRING) return;
 
   uint32_t idle = now - s_lastStirMs;
-  if (idle < STIR_IDLE_RESET_MS) {
-    // Fill the power bar over the configured stir time of active stirring.
+  if (idle < STIR_ACTIVE_MS) {
+    // Actively stirring: fill the bar over the configured stir time.
     float secs = (float)kStirSecs[g_stirTimeIdx];
     s_stirProgress += (float)dt / (secs * 1000.0f);
     if (s_stirProgress >= 1.0f) { s_stirProgress = 1.0f; s_stirReady = true; }
   } else {
-    // Paused too long: empty the bar but stay at the cauldron...
-    s_stirProgress = 0.0f;
-    // ...and only after a longer idle drift back to the ingredient screen.
-    if (idle >= STIR_IDLE_BACK_MS) {
+    // Paused: drain gradually (20%/sec) rather than snapping to zero, so brief
+    // hesitations barely cost progress and you resume from where it dropped.
+    s_stirProgress -= STIR_DECAY_PER_S * (float)dt / 1000.0f;
+    if (s_stirProgress < 0.0f) s_stirProgress = 0.0f;
+    // Once fully drained and idle a while, drift back to the ingredient screen.
+    if (s_stirProgress <= 0.0f && idle >= STIR_IDLE_BACK_MS) {
       if (s_sensedCombo != g_combo) enterCombo(s_sensedCombo);
       else g_state = ST_IDENTIFY;
     }

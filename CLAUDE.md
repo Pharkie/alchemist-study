@@ -87,10 +87,10 @@ States: **IDLE → IDENTIFY → STIRRING → REVEAL**
   list); no realm header. A subtle "turn to stir" cue.
 - **STIRRING** — encoder is turning. A **power bar** fills over the configured
   **Stir Time** (1/3/5/8 s, a setting) of active stirring, with a swirling vortex
-  + rising trill (~320→1100 Hz). **Pause >0.5 s and the bar resets to zero** but
-  you stay at the cauldron; a longer idle (~2.5 s) drifts back to IDENTIFY. When
-  the bar fills it **arms** ("Press to brew") and holds until a press or a real
-  combo change.
+  + rising trill (~320→1100 Hz). **Pause and the bar drains gradually (~20%/sec)**
+  rather than resetting, so brief hesitations barely cost progress; once empty and
+  idle a while (~2.5 s) it drifts back to IDENTIFY. When the bar fills it **arms**
+  ("Press to brew") and holds until a press or a real combo change.
 - **REVEAL** — shows the resulting potion name (wrap to two lines if wider than
   128px) with a short ascending success jingle.
 

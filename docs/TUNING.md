@@ -10,15 +10,16 @@ pio run -e c3-dev -t upload
 ## Stir model (time-based)
 
 The power bar fills over **Stir Time** seconds of *active* stirring (Stir Time is
-a runtime setting: 1/3/5/8 s — `kStirSecs` in `main.cpp`). Pause longer than
-`STIR_IDLE_RESET_MS` and the bar resets to zero (you stay on the brewing screen);
-after `STIR_IDLE_BACK_MS` it drifts back to identify. When the bar fills it arms
-("Press to brew") and holds until a press or a real combo change.
+a runtime setting: 1/3/5/8 s — `kStirSecs` in `main.cpp`). Pause and the bar
+**drains gradually** (not a reset); resume and it continues from there. Once empty
+and idle a while it drifts back to identify. A full bar arms ("Press to brew") and
+holds until a press or a real combo change.
 
 | Constant | Default | Effect |
 |---|---|---|
-| `STIR_IDLE_RESET_MS` | `500` | Pause longer than this → the bar empties to zero. |
-| `STIR_IDLE_BACK_MS` | `2500` | Idle longer than this (bar empty) → return to identify. |
+| `STIR_ACTIVE_MS` | `150` | Motion within this window counts as "still stirring" (bar fills). |
+| `STIR_DECAY_PER_S` | `0.20` | Bar drains this fraction/sec while paused. Higher = drains faster. |
+| `STIR_IDLE_BACK_MS` | `2500` | Empty + idle this long → return to identify. |
 | `STIR_ANGLE_STEP` | `0.18` | Radians the swirl mote moves per encoder count (visual only). |
 
 ## Audio (needs a passive buzzer)
