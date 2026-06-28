@@ -589,10 +589,11 @@ static void renderReveal(uint32_t now) {
     drawSparkle(11, 53, r); drawSparkle(117, 53, r);
   }
 
-  // Realm caption at the top, then the potion name.
-  oled.setFont(u8g2_font_helvR08_tr);
-  drawCenteredF(kUniverseName[g_universe], 14);
-  oled.drawHLine(34, 17, 60);
+  // The potion name alone — the realm is implicit. A small ornamental
+  // flourish up top where the caption used to sit, then the name.
+  oled.drawHLine(44, 15, 40);
+  drawDiamond(40, 15);
+  drawDiamond(88, 15);
   drawPotionName(kPotions[g_universe][g_combo]);
   oled.sendBuffer();
 }
