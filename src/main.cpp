@@ -112,6 +112,9 @@ static constexpr float    STIR_ANGLE_STEP   = 0.18f;  // swirl radians per count
 static constexpr float    STIR_READY_LEVEL  = 0.5f;   // progress needed to brew
 static constexpr uint16_t PITCH_MIN_HZ      = 320;
 static constexpr uint16_t PITCH_MAX_HZ      = 1100;
+static constexpr int32_t  ENC_STEP          = 4;     // encoder counts per menu/select step
+
+#define FW_VERSION "v0.4"
 
 // ---- Hardware objects --------------------------------------------------
 // Full-buffer (_F_) SSD1306 over hardware I2C.
@@ -120,10 +123,16 @@ Preferences prefs;
 static bool g_haveDisplay = false;  // set at boot; if false we run headless
 
 // ---- Runtime state -----------------------------------------------------
-enum State { ST_IDLE, ST_IDENTIFY, ST_STIRRING, ST_REVEAL };
+enum State { ST_IDLE, ST_IDENTIFY, ST_STIRRING, ST_REVEAL, ST_SETTINGS, ST_DIAG };
 static State    g_state    = ST_IDLE;
 static uint8_t  g_combo    = 0;            // committed combo (0..7)
 static Universe g_universe = UNI_SKYRIM;
+
+// Persisted settings + UI cursors.
+static bool     g_mute       = false;
+static uint8_t  g_brightness = 3;          // 1..5
+static int      s_menuIdx    = 0;          // highlighted settings item
+static int32_t  s_navAccum   = 0;          // encoder accumulator for discrete steps
 
 // reed debounce / latch
 static uint8_t  s_rawComboLast = 0;
@@ -169,6 +178,7 @@ static void playCurrentNote() {
 }
 
 static void startMelody(const Note* m, uint8_t n, uint32_t now) {
+  if (g_mute) return;
   s_melody = m;
   s_melodyLen = n;
   s_melodyIdx = 0;
@@ -179,6 +189,10 @@ static void startMelody(const Note* m, uint8_t n, uint32_t now) {
 }
 
 static void updateAudio(uint32_t now) {
+  if (g_mute) {
+    if (s_buzzerOn || s_melodyActive) { noTone(PIN_BUZZER); s_buzzerOn = false; s_melodyActive = false; }
+    return;
+  }
   if (s_melodyActive) {
     if (now - s_noteStartMs >= s_melody[s_melodyIdx].durMs) {
       s_melodyIdx++;
@@ -252,28 +266,112 @@ static void onSensedComboChange() {
     // else: partial removal of the latched set — ignore it
     return;
   }
+  if (g_state == ST_SETTINGS || g_state == ST_DIAG) return;  // menu owns the UI
   enterCombo(raw);
 }
 
+// ---- Settings model (reusable mini-menu) -------------------------------
+static const char* const kOnOff[] = { "Off", "On" };
+
+static void applyBrightness() {
+  if (g_haveDisplay) oled.setContrast((uint8_t)map(g_brightness, 1, 5, 16, 255));
+}
+
+static int  getRealm()       { return (int)g_universe; }
+static void setRealm(int v)  { g_universe = (Universe)v; saveUniverse();
+                               startMelody(MEL_TOGGLE, NUM_NOTES(MEL_TOGGLE), millis()); }
+static int  getMute()        { return g_mute ? 1 : 0; }
+static void setMute(int v)   { g_mute = (v != 0); prefs.putUChar("mute", g_mute ? 1 : 0);
+                               if (g_mute) noTone(PIN_BUZZER); }
+static int  getBright()      { return g_brightness; }
+static void setBright(int v) { g_brightness = (uint8_t)v; prefs.putUChar("bright", g_brightness);
+                               applyBrightness(); }
+
+static void settingsEnter() { g_state = ST_SETTINGS; s_menuIdx = 0; s_navAccum = 0; }
+static void settingsExit()  { g_state = ST_IDLE;     s_navAccum = 0; }
+static void diagEnter()     { g_state = ST_DIAG;     s_navAccum = 0; }
+
+enum ItemKind { K_CHOICE, K_RANGE, K_INFO, K_ACTION };
+struct MenuItem {
+  const char*        label;
+  ItemKind           kind;
+  int  (*get)();
+  void (*set)(int);
+  const char* const* choices;    // K_CHOICE
+  int                nChoices;
+  int                rmin, rmax;  // K_RANGE
+  const char*        info;        // K_INFO
+  void (*action)();              // K_ACTION
+};
+
+static const MenuItem kMenu[] = {
+  { "Realm",        K_CHOICE, getRealm,  setRealm,  kUniverseName, UNI_COUNT, 0, 0, nullptr,    nullptr      },
+  { "Mute",         K_CHOICE, getMute,   setMute,   kOnOff,        2,         0, 0, nullptr,    nullptr      },
+  { "Bright",       K_RANGE,  getBright, setBright, nullptr,       0,         1, 5, nullptr,    nullptr      },
+  { "Hardware Test",K_ACTION, nullptr,   nullptr,   nullptr,       0,         0, 0, nullptr,    diagEnter    },
+  { "Firmware",     K_INFO,   nullptr,   nullptr,   nullptr,       0,         0, 0, FW_VERSION, nullptr      },
+  { "Exit",         K_ACTION, nullptr,   nullptr,   nullptr,       0,         0, 0, nullptr,    settingsExit },
+};
+static const int kMenuN = (int)(sizeof(kMenu) / sizeof(kMenu[0]));
+
+static void menuActivate() {
+  const MenuItem& m = kMenu[s_menuIdx];
+  switch (m.kind) {
+    case K_CHOICE: if (m.set) m.set((m.get() + 1) % m.nChoices); break;
+    case K_RANGE:  if (m.set) { int v = m.get() + 1; if (v > m.rmax) v = m.rmin; m.set(v); } break;
+    case K_INFO:   break;
+    case K_ACTION: if (m.action) m.action(); break;
+  }
+}
+
+// Encoder raw delta -> discrete detent steps (so menus move one item per click).
+static int navSteps(int32_t d) {
+  s_navAccum += d;
+  int steps = (int)(s_navAccum / ENC_STEP);
+  s_navAccum -= (int32_t)steps * ENC_STEP;
+  return steps;
+}
+
+static void updateMenuNav(int32_t d) {
+  int steps = navSteps(d);
+  if (!steps) return;
+  s_menuIdx = ((s_menuIdx + steps) % kMenuN + kMenuN) % kMenuN;
+}
+
+// ---- Button actions (state-aware) --------------------------------------
 static void onShortPress(uint32_t now) {
-  if (g_state == ST_REVEAL) return;        // only a combo change leaves reveal
-  if (g_combo == 0) return;                // nothing to brew
-  if (s_stirReady) {
-    g_state = ST_REVEAL;
-    s_revealMs = now;
-    startMelody(MEL_SUCCESS, NUM_NOTES(MEL_SUCCESS), now);
-    Serial.printf("[reveal] %s\n", kPotions[g_universe][g_combo]);
-  } else {
-    // Stirring is required first — give a little "not yet" buzz.
-    startMelody(MEL_NOTREADY, NUM_NOTES(MEL_NOTREADY), now);
+  switch (g_state) {
+    case ST_IDLE:
+      settingsEnter();                       // the knob opens Settings
+      break;
+    case ST_IDENTIFY:
+    case ST_STIRRING:
+      if (g_combo == 0) break;
+      if (s_stirReady) {
+        g_state = ST_REVEAL;
+        s_revealMs = now;
+        startMelody(MEL_SUCCESS, NUM_NOTES(MEL_SUCCESS), now);
+        Serial.printf("[reveal] %s\n", kPotions[g_universe][g_combo]);
+      } else {
+        startMelody(MEL_NOTREADY, NUM_NOTES(MEL_NOTREADY), now);  // stir first
+      }
+      break;
+    case ST_SETTINGS:
+      menuActivate();
+      break;
+    case ST_REVEAL:
+    case ST_DIAG:
+      break;  // reveal: only a combo change leaves; diag: long-press to exit
   }
 }
 
 static void onLongPress(uint32_t now) {
-  g_universe = (Universe)((g_universe + 1) % UNI_COUNT);
-  saveUniverse();
-  startMelody(MEL_TOGGLE, NUM_NOTES(MEL_TOGGLE), now);
-  Serial.printf("[universe] -> %s\n", kUniverseName[g_universe]);
+  (void)now;
+  switch (g_state) {
+    case ST_SETTINGS: settingsExit();  break;  // leave the menu to idle
+    case ST_DIAG:     settingsEnter(); break;  // diagnostic back to the menu
+    default:          break;
+  }
 }
 
 static void updateButton(uint32_t now) {
@@ -293,12 +391,8 @@ static void updateButton(uint32_t now) {
   }
 }
 
-static void updateStir(uint32_t now, uint32_t dt) {
-  int32_t cnt = g_encoderCount;          // snapshot the ISR counter
-  int32_t d = cnt - s_lastEncoder;
-  s_lastEncoder = cnt;
-
-  // Stir only matters in identify/stirring; reveal is frozen until combo change.
+static void updateStir(uint32_t now, uint32_t dt, int32_t d) {
+  // Stir only matters in identify/stirring (loop dispatches the delta by state).
   if (g_state != ST_IDENTIFY && g_state != ST_STIRRING) return;
 
   // Continuous decay; turning the knob adds faster than it bleeds off.
@@ -597,6 +691,77 @@ static void renderReveal(uint32_t now) {
   oled.sendBuffer();
 }
 
+static const char* menuValueStr(const MenuItem& m, char* buf, int n) {
+  switch (m.kind) {
+    case K_CHOICE: return m.get ? m.choices[m.get()] : "";
+    case K_RANGE:  snprintf(buf, n, "%d", m.get ? m.get() : 0); return buf;
+    case K_INFO:   return m.info ? m.info : "";
+    case K_ACTION: return "";
+  }
+  return "";
+}
+
+static void renderSettings() {
+  oled.clearBuffer();
+  oled.drawBox(0, 0, 128, 13);
+  oled.setDrawColor(0);
+  oled.setFont(u8g2_font_helvB08_tr);
+  oled.drawStr(4, 10, "Settings");
+  oled.setDrawColor(1);
+
+  const int VIS = 5;
+  int first = 0;
+  if (kMenuN > VIS) {
+    first = s_menuIdx - VIS / 2;
+    if (first < 0) first = 0;
+    if (first > kMenuN - VIS) first = kMenuN - VIS;
+  }
+  oled.setFont(u8g2_font_helvR08_tr);
+  for (int row = 0; row < VIS && first + row < kMenuN; row++) {
+    int i = first + row;
+    int y = 22 + row * 10;
+    bool sel = (i == s_menuIdx);
+    if (sel) { oled.drawBox(0, y - 8, 128, 10); oled.setDrawColor(0); }
+    oled.drawStr(4, y, kMenu[i].label);
+    char tmp[16];
+    const char* v = menuValueStr(kMenu[i], tmp, sizeof(tmp));
+    if (v && v[0]) oled.drawStr(128 - oled.getStrWidth(v) - 4, y, v);
+    if (sel) oled.setDrawColor(1);
+  }
+  oled.sendBuffer();
+}
+
+// Built-in live diagnostic (reachable from Settings -> Hardware Test).
+static void renderDiag() {
+  oled.clearBuffer();
+  oled.drawBox(0, 0, 128, 13);
+  oled.setDrawColor(0);
+  oled.setFont(u8g2_font_helvB08_tr);
+  oled.drawStr(4, 10, "Hardware Test");
+  oled.setDrawColor(1);
+
+  oled.setFont(u8g2_font_helvR08_tr);
+  const int rp[3] = { PIN_REED_SLOT1, PIN_REED_SLOT2, PIN_REED_SLOT3 };
+  int y = 24;
+  for (int i = 0; i < 3; i++) {
+    bool on = (digitalRead(rp[i]) == LOW);
+    char lbl[18];
+    snprintf(lbl, sizeof(lbl), "Reed %d  G%d", i + 1, rp[i]);
+    oled.drawStr(4, y, lbl);
+    if (on) oled.drawBox(96, y - 8, 9, 9);
+    else    oled.drawFrame(96, y - 8, 9, 9);
+    y += 10;
+  }
+  bool btn = (digitalRead(PIN_ENC_SW) == LOW);
+  char e[26];
+  snprintf(e, sizeof(e), "Btn %s   enc %ld", btn ? "DOWN" : "up", (long)g_encoderCount);
+  oled.drawStr(4, y, e);
+
+  oled.setFont(u8g2_font_5x8_tr);
+  drawCenteredF("hold knob to exit", 63);
+  oled.sendBuffer();
+}
+
 static void render() {
   if (!g_haveDisplay) return;  // headless: skip drawing if no panel on the bus
   uint32_t now = millis();
@@ -605,6 +770,8 @@ static void render() {
     case ST_IDENTIFY: renderIdentify(now); break;
     case ST_STIRRING: renderStirring(now); break;
     case ST_REVEAL:   renderReveal(now);   break;
+    case ST_SETTINGS: renderSettings();    break;
+    case ST_DIAG:     renderDiag();        break;
   }
 }
 
@@ -628,27 +795,34 @@ void setup() {
 
   pinMode(PIN_BUZZER, OUTPUT);
 
-  // Boot chime: a rising two-note "awake" signal. Doubles as a buzzer test —
-  // if you hear it, GPIO1 and the buzzer are wired and working.
-  tone(PIN_BUZZER, 660); delay(120);
-  tone(PIN_BUZZER, 990); delay(150);
-  noTone(PIN_BUZZER);
+  // ---- Load persisted settings (before the chime, so Mute is honored) ----
+  prefs.begin("alchemy", false);
+  g_universe   = (Universe)prefs.getUChar("universe", UNI_SKYRIM);
+  g_mute       = prefs.getUChar("mute", 0) != 0;
+  g_brightness = prefs.getUChar("bright", 3);
+  if (g_brightness < 1) g_brightness = 1;
+  if (g_brightness > 5) g_brightness = 5;
+
+  // Boot chime: a rising two-note "awake" signal (also a buzzer test).
+  if (!g_mute) {
+    tone(PIN_BUZZER, 660); delay(120);
+    tone(PIN_BUZZER, 990); delay(150);
+    noTone(PIN_BUZZER);
+  }
 
   // OLED. Let U8g2 own the single Wire.begin(); we only preset the C3's I2C
-  // pins. Calling Wire.begin() ourselves AND letting U8g2 begin() again leaves
-  // the core-3.x i2c-ng driver stuck in ESP_ERR_INVALID_STATE (every transmit
-  // fails). setPins() just records the pins for U8g2's begin() to use.
-  // Bus at 400 kHz so a full-buffer send is ~2-3 ms (smooth swirl animation).
+  // pins (calling Wire.begin() ourselves AND letting U8g2 begin() again wedges
+  // the core-3.x i2c-ng driver in ESP_ERR_INVALID_STATE). 400 kHz keeps a
+  // full-buffer send to ~2-3 ms for a smooth swirl.
   Wire.setPins(PIN_OLED_SDA, PIN_OLED_SCL);
   oled.setBusClock(400000);
   oled.begin();
 
-  // Probe for the panel. If it's absent/miswired, run headless: skip all
-  // drawing (otherwise every sendBuffer would flood the log with
-  // ESP_ERR_INVALID_STATE and drown the input traces). Wire is already up
-  // from oled.begin(), so this probe is just one address transaction.
+  // Probe for the panel; if absent/miswired, run headless (skip drawing so we
+  // don't flood the log with ESP_ERR_INVALID_STATE every frame).
   Wire.beginTransmission(0x3C);
   g_haveDisplay = (Wire.endTransmission() == 0);
+  applyBrightness();
 
   // ---- Boot self-check: state what we found, loudly, and don't pretend. ----
   Serial.println("---- self-check ----");
@@ -656,24 +830,19 @@ void setup() {
                 PIN_REED_SLOT1, PIN_REED_SLOT2, PIN_REED_SLOT3);
   Serial.printf("  encoder: A=GPIO%d B=GPIO%d SW=GPIO%d\n",
                 PIN_ENC_A, PIN_ENC_B, PIN_ENC_SW);
-  Serial.printf("  buzzer:  GPIO%d\n", PIN_BUZZER);
+  Serial.printf("  buzzer:  GPIO%d  (mute=%s)\n", PIN_BUZZER, g_mute ? "on" : "off");
   Serial.printf("  OLED:    SDA=GPIO%d SCL=GPIO%d -> %s\n",
                 PIN_OLED_SDA, PIN_OLED_SCL,
                 g_haveDisplay ? "FOUND at 0x3C [OK]" : "NOT FOUND [FAIL]");
+  Serial.printf("  realm=%s  bright=%d  fw=%s\n",
+                kUniverseName[g_universe], g_brightness, FW_VERSION);
   if (!g_haveDisplay) {
     Serial.println("  !! OLED not on the bus. Running HEADLESS (no screen).");
-    Serial.println("  !! Check: VCC=3V3 (measure at the panel), GND, SDA->GPIO5,");
-    Serial.println("  !! SCL->GPIO6. Run the hwcheck build to map your wiring:");
-    Serial.println("  !!   pio run -e c3-hwcheck -t upload");
-    // Fail loudly on the one output we DO have: a low error triple-beep.
-    for (int i = 0; i < 3; i++) { tone(PIN_BUZZER, 180); delay(120); noTone(PIN_BUZZER); delay(90); }
+    Serial.println("  !! Check VCC=3V3, GND, SDA->GPIO5, SCL->GPIO6; or run c3-hwcheck.");
+    if (!g_mute)
+      for (int i = 0; i < 3; i++) { tone(PIN_BUZZER, 180); delay(120); noTone(PIN_BUZZER); delay(90); }
   }
   Serial.println("--------------------");
-
-  // Restore the chosen universe from NVS (defaults to Skyrim).
-  prefs.begin("alchemy", false);
-  g_universe = (Universe)prefs.getUChar("universe", UNI_SKYRIM);
-  Serial.printf("[boot] universe = %s\n", kUniverseName[g_universe]);
 
   s_lastEncoder = g_encoderCount;
   s_lastLoopMs = millis();
@@ -696,8 +865,18 @@ void loop() {
     onSensedComboChange();        // honor or latch, depending on state
   }
 
+  // Encoder delta, dispatched by state.
+  int32_t cnt = g_encoderCount;
+  int32_t d = cnt - s_lastEncoder;
+  s_lastEncoder = cnt;
+  switch (g_state) {
+    case ST_IDENTIFY:
+    case ST_STIRRING: updateStir(now, dt, d);     break;
+    case ST_SETTINGS: if (d) updateMenuNav(d);    break;
+    default:          break;  // IDLE / REVEAL / DIAG: encoder not navigated
+  }
+
   updateButton(now);
-  updateStir(now, dt);
   updateAudio(now);
 
   if (now - s_lastRenderMs >= RENDER_INTERVAL_MS) {

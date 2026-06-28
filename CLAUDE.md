@@ -80,8 +80,8 @@ table → ±1, internal pullups). `g_encoderCount` is the running signed positio
 
 States: **IDLE → IDENTIFY → STIRRING → REVEAL**
 
-- **IDLE** — empty base. "Place ingredients" + the realm name (Skyrim / BG3) and
-  the hold-to-change-realm hint. The realm lives here, not on the identify screen.
+- **IDLE** — empty base. "Place ingredients" + the current realm name (display
+  only). A press opens **Settings** (where the realm is changed).
 - **IDENTIFY** — ≥1 bottle seated. **Features** the ingredient name(s) in an
   elegant serif with sparkles (a single ingredient large, two/three as a flanked
   list); no realm header. A subtle "turn to stir" cue.
@@ -103,10 +103,30 @@ States: **IDLE → IDENTIFY → STIRRING → REVEAL**
   restarts on a genuinely new arrangement: a bottle **added** to the set, or the
   base cleared to **empty and then refilled**. When a stir fizzles out (knob
   idle) it resyncs to whatever is actually on the base.
-- **Short press** = mix & reveal — but **stirring is REQUIRED first**: a press
-  before enough stir progress is accumulated does nothing meaningful (no reveal).
-- **Long press (≥600 ms)** = toggle universe (Skyrim ↔ BG3), distinct two-note
-  beep. Persist choice to NVS so it survives reboot.
+- **Short press**:
+  - In IDENTIFY/STIRRING = mix & reveal — but **stirring is REQUIRED first**: a
+    press before enough stir progress does nothing (a low "not yet" buzz).
+  - On IDLE = open **Settings**.
+  - In SETTINGS = activate the highlighted item.
+- **Long press (≥600 ms)** = leave a menu (SETTINGS → idle, Hardware Test →
+  Settings). It no longer toggles the realm.
+
+### Settings menu (`ST_SETTINGS`) — a reusable mini-menu
+
+Open with a press on the idle screen; turn to move, press to change/activate,
+long-press (or **Exit**) to leave. Items are a data table (`kMenu` in
+`main.cpp`) of `{label, kind, get/set, …}`, so adding one is a single row.
+
+- **Realm** — Skyrim / Baldur's Gate 3 (persisted; replaces the old long-press)
+- **Mute** — Off / On (gates all audio: chime, trill, jingles, error beep)
+- **Bright** — 1–5 (OLED contrast via `setContrast`)
+- **Hardware Test** — opens a built-in live diagnostic (`ST_DIAG`): reed/button
+  boxes + encoder count; long-press to return. (Same idea as the `c3-hwcheck`
+  build, but in-firmware so it needs no reflash.)
+- **Firmware** — shows the version string
+- **Exit** — back to idle
+
+Mute and Brightness persist to NVS alongside the universe.
 
 ## Potion lookup — index by combo `1..7` (`0` = idle)
 

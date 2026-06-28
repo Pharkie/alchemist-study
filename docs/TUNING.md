@@ -37,6 +37,15 @@ Melodies (success jingle, realm-toggle beep, "not ready" buzz) are the
 | `LONG_PRESS_MS` | `600` | Hold duration that toggles the realm. |
 | `BTN_DEBOUNCE_MS` | `30` | Minimum press to count as a short press. |
 | `RENDER_INTERVAL_MS` | `33` | Display refresh cap (~30 fps). ~30 ms is the I²C floor; lower won't help. |
+| `ENC_STEP` | `4` | Encoder counts per menu/selector step. Lower = menu moves faster per detent. |
+
+## Settings menu
+
+Runtime settings live in the on-device **Settings** menu (press the knob on the
+idle screen): **Realm**, **Mute**, **Brightness** (1–5), **Hardware Test**,
+**Firmware**, **Exit**. Mute, brightness, and realm persist to NVS. The menu is a
+data table (`kMenu` in `main.cpp`) — add an item by appending one row
+(`{label, kind, get, set, …}`); kinds are choice / range / info / action.
 
 ## Encoder direction
 
