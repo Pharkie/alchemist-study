@@ -16,6 +16,22 @@ pio run -e c3-dev -t upload   # flash dev build (verbose logs)
 pio device monitor -b 115200  # serial monitor over USB-CDC
 ```
 
+### Hardware check
+
+A standalone wiring diagnostic lives in `src/hwcheck.cpp` (its own build env):
+
+```sh
+pio run -e c3-hwcheck -t upload   # flash the hardware checker
+pio device monitor -b 115200      # then trigger each component
+```
+
+It beeps the buzzer, scans for the OLED and draws a test pattern, and — as
+you trigger each reed / press the button / turn the knob — names the GPIO that
+reacts, flagging any pin that *shouldn't* be wired (catches silkscreen/breakout
+mismatches). The real firmware also self-checks on boot: it plays a rising
+chime, prints a pin-map report, and if the OLED is absent it runs headless,
+beeps an error triple, and nags over serial rather than failing silently.
+
 > Requires **PlatformIO Core ≥ 6.1.19** (the pinned pioarduino platform needs it).
 
 No configuration or credentials are needed — the bench firmware runs fully offline.

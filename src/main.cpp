@@ -436,6 +436,12 @@ void setup() {
 
   pinMode(PIN_BUZZER, OUTPUT);
 
+  // Boot chime: a rising two-note "awake" signal. Doubles as a buzzer test —
+  // if you hear it, GPIO1 and the buzzer are wired and working.
+  tone(PIN_BUZZER, 660); delay(120);
+  tone(PIN_BUZZER, 990); delay(150);
+  noTone(PIN_BUZZER);
+
   // OLED. Let U8g2 own the single Wire.begin(); we only preset the C3's I2C
   // pins. Calling Wire.begin() ourselves AND letting U8g2 begin() again leaves
   // the core-3.x i2c-ng driver stuck in ESP_ERR_INVALID_STATE (every transmit
@@ -451,8 +457,26 @@ void setup() {
   // from oled.begin(), so this probe is just one address transaction.
   Wire.beginTransmission(0x3C);
   g_haveDisplay = (Wire.endTransmission() == 0);
-  Serial.printf("[boot] OLED %s\n",
-                g_haveDisplay ? "found at 0x3C" : "NOT FOUND — running headless");
+
+  // ---- Boot self-check: state what we found, loudly, and don't pretend. ----
+  Serial.println("---- self-check ----");
+  Serial.printf("  reeds:   GPIO%d/%d/%d (slots 1/2/3)\n",
+                PIN_REED_SLOT1, PIN_REED_SLOT2, PIN_REED_SLOT3);
+  Serial.printf("  encoder: A=GPIO%d B=GPIO%d SW=GPIO%d\n",
+                PIN_ENC_A, PIN_ENC_B, PIN_ENC_SW);
+  Serial.printf("  buzzer:  GPIO%d\n", PIN_BUZZER);
+  Serial.printf("  OLED:    SDA=GPIO%d SCL=GPIO%d -> %s\n",
+                PIN_OLED_SDA, PIN_OLED_SCL,
+                g_haveDisplay ? "FOUND at 0x3C [OK]" : "NOT FOUND [FAIL]");
+  if (!g_haveDisplay) {
+    Serial.println("  !! OLED not on the bus. Running HEADLESS (no screen).");
+    Serial.println("  !! Check: VCC=3V3 (measure at the panel), GND, SDA->GPIO5,");
+    Serial.println("  !! SCL->GPIO6. Run the hwcheck build to map your wiring:");
+    Serial.println("  !!   pio run -e c3-hwcheck -t upload");
+    // Fail loudly on the one output we DO have: a low error triple-beep.
+    for (int i = 0; i < 3; i++) { tone(PIN_BUZZER, 180); delay(120); noTone(PIN_BUZZER); delay(90); }
+  }
+  Serial.println("--------------------");
 
   // Restore the chosen universe from NVS (defaults to Skyrim).
   prefs.begin("alchemy", false);
@@ -486,5 +510,12 @@ void loop() {
   if (now - s_lastRenderMs >= RENDER_INTERVAL_MS) {
     s_lastRenderMs = now;
     render();
+  }
+
+  // Never let a degraded (screenless) run look healthy: nag periodically.
+  static uint32_t s_lastWarnMs = 0;
+  if (!g_haveDisplay && now - s_lastWarnMs >= 5000) {
+    s_lastWarnMs = now;
+    Serial.println("[warn] HEADLESS — no OLED at 0x3C on SDA=5/SCL=6 (check wiring)");
   }
 }
