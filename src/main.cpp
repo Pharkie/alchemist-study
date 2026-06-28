@@ -531,20 +531,16 @@ static void renderIdle(uint32_t now) {
   drawMoon(15, 15, 6);
 
   oled.setFont(u8g2_font_ncenB12_tr);
-  drawCenteredF("Place the", 24);
-  drawCenteredF("ingredients", 39);
+  drawCenteredF("Place the", 28);
+  drawCenteredF("ingredients", 44);
 
   // Divider with diamond end-caps.
-  oled.drawHLine(28, 44, 72);
-  drawDiamond(22, 44); drawDiamond(106, 44);
+  oled.drawHLine(28, 51, 72);
+  drawDiamond(22, 51); drawDiamond(106, 51);
 
-  // Current realm (display only)...
-  oled.setFont(u8g2_font_helvB08_tr);
-  drawCenteredF(kUniverseName[g_universe], 54);
-
-  // ...and the way into Settings.
+  // The way into Settings (no realm shown here — it lives in the menu).
   oled.setFont(u8g2_font_5x8_tr);
-  drawCenteredF("Press for settings", 63);
+  drawCenteredF("Press for settings", 62);
   oled.sendBuffer();
 }
 

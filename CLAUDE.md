@@ -80,8 +80,8 @@ table → ±1, internal pullups). `g_encoderCount` is the running signed positio
 
 States: **IDLE → IDENTIFY → STIRRING → REVEAL**
 
-- **IDLE** — empty base. "Place ingredients" + the current realm name (display
-  only). A press opens **Settings** (where the realm is changed).
+- **IDLE** — empty base. "Place ingredients" + "Press for settings". No realm
+  shown here; a press opens **Settings** (where the realm lives).
 - **IDENTIFY** — ≥1 bottle seated. **Features** the ingredient name(s) in an
   elegant serif with sparkles (a single ingredient large, two/three as a flanked
   list); no realm header. A subtle "turn to stir" cue.
