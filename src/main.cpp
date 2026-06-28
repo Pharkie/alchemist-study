@@ -151,6 +151,7 @@ static constexpr uint32_t RENDER_INTERVAL_MS = 33;   // ~30 fps display cap
 static constexpr uint32_t REVEAL_ANIM_MS     = 1300; // phase 1: build-up animation (no name yet)
 static constexpr uint32_t REVEAL_NAME_MS     = 3000; // phase 2: hold the potion name, then idle
 static constexpr uint32_t REED_GRACE_MS      = 2500; // identify: keep the combo this long after the base empties
+static constexpr uint32_t STIR_ZERO_GRACE_MS = 3000; // stirring: hold this long at an empty bar before reverting
 static constexpr float    STIR_ANGLE_STEP   = 0.18f;  // swirl radians per encoder count
 static constexpr uint16_t PITCH_MIN_HZ      = 320;
 static constexpr uint16_t PITCH_MAX_HZ      = 1100;
@@ -194,6 +195,7 @@ static int32_t s_lastEncoder = 0;
 static float   s_stirProgress = 0.0f;      // 0..1 power bar (time-based fill)
 static float   s_swirlAngle   = 0.0f;      // radians, follows the encoder
 static bool    s_stirReady    = false;     // latched once the bar fills
+static uint32_t s_stirZeroMs  = 0;         // last time the bar was non-empty (zero-grace timer)
 
 // reveal sub-phases (timed from g_stateMs; advancing a phase re-stamps it)
 enum RevealPhase { RP_ANIM, RP_NAME };
@@ -346,9 +348,9 @@ static const char* const kOnOff[] = { "Off", "On" };
 // harder the fuller (further right) the bar already is; higher levels start a
 // touch slower and slow down much more steeply toward the top.
 static const char* const  kStirLabels[] = { "Easy", "Medium", "Hard" };
-static const float        kStirGain[]   = { 0.060f, 0.050f, 0.042f }; // bar added per encoder count (when empty)
-static const float        kStirResist[] = { 0.35f,  0.60f,  0.78f };  // adding gets this much harder toward full
-static const float        kStirDecay[]  = { 0.15f,  0.26f,  0.40f };  // bar drained per second, ALWAYS
+static const float        kStirGain[]   = { 0.060f, 0.050f, 0.026f }; // bar added per encoder count (when empty)
+static const float        kStirResist[] = { 0.35f,  0.60f,  0.52f };  // adding gets this much harder toward full
+static const float        kStirDecay[]  = { 0.15f,  0.26f,  0.72f };  // bar drained per second, ALWAYS
 static constexpr int      kStirN        = 3;
 
 static void applyBrightness() {
@@ -505,7 +507,7 @@ static void updateStir(uint32_t now, uint32_t dt, int32_t d) {
   // Knob motion spins the swirl and (from identify) starts the stir.
   if (d != 0) {
     s_swirlAngle += STIR_ANGLE_STEP * (float)d;
-    if (g_state == ST_IDENTIFY) enterState(ST_STIRRING);
+    if (g_state == ST_IDENTIFY) { enterState(ST_STIRRING); s_stirZeroMs = now; }
   }
 
   if (s_stirReady) return;          // armed: hold the full bar until press/combo change
@@ -525,10 +527,14 @@ static void updateStir(uint32_t now, uint32_t dt, int32_t d) {
   if (s_stirProgress >= 1.0f) {
     s_stirProgress = 1.0f;
     s_stirReady = true;
-  } else if (s_stirProgress <= 0.0f) {
-    s_stirProgress = 0.0f;
-    if (s_sensedCombo != g_combo) enterCombo(s_sensedCombo);  // base changed -> resync
-    else enterState(ST_IDENTIFY);                             // drained -> back to identify
+  } else if (s_stirProgress > 0.0f) {
+    s_stirZeroMs = now;                  // still brewing — keep the grace clock fresh
+  } else {
+    s_stirProgress = 0.0f;               // empty: hold a grace before giving up
+    if (now - s_stirZeroMs >= STIR_ZERO_GRACE_MS) {
+      if (s_sensedCombo != g_combo) enterCombo(s_sensedCombo);  // base changed -> resync
+      else enterState(ST_IDENTIFY);                             // give up -> back to identify
+    }
   }
 }
 

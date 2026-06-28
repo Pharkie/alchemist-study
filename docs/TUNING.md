@@ -23,9 +23,13 @@ bar arms ("Press to create") and holds until a press or a real combo change. The
 
 | Constant | Easy / Med / Hard | Effect |
 |---|---|---|
-| `kStirGain[]` | `0.060 / 0.050 / 0.042` | Bar added per encoder count (when empty). Lower = harder. |
-| `kStirResist[]` | `0.35 / 0.60 / 0.78` | How much the add shrinks toward full. Higher = brutal finish. |
-| `kStirDecay[]` | `0.15 / 0.26 / 0.40` | Bar drained per second, **always**. Higher = punishes hesitation. |
+| `kStirGain[]` | `0.060 / 0.050 / 0.026` | Bar added per encoder count (when empty). Lower = harder. |
+| `kStirResist[]` | `0.35 / 0.60 / 0.52` | How much the add shrinks toward full. Higher = harder top (but `1/(1-R)` makes the very top unreachable if too high). |
+| `kStirDecay[]` | `0.15 / 0.26 / 0.72` | Bar drained per second, **always**. Higher = punishes hesitation. |
+
+Felt effort to advance at position `p` is `decay / (gain·(1−R·p))` — a hyperbola
+(gentle then steep near the top). To make a level uniformly N× harder, scale
+gain down and/or decay up by ~N; raising `resist` only steepens the *end*.
 | `STIR_ANGLE_STEP` | `0.18` | Swirl radians per encoder count (visual only). |
 
 ## Audio (needs a passive buzzer)
@@ -46,6 +50,8 @@ Melodies (success jingle, realm-toggle beep, "not ready" buzz) are the
 | `LONG_PRESS_MS` | `600` | Hold to leave a menu / cancel an edit. |
 | `BTN_DEBOUNCE_MS` | `30` | Minimum press to count as a short press. |
 | `RENDER_INTERVAL_MS` | `33` | Display refresh cap (~30 fps). ~30 ms is the I²C floor; lower won't help. |
+| `STIR_ZERO_GRACE_MS` | `3000` | Hold the brewing screen this long at an empty bar before reverting. |
+| `REED_GRACE_MS` | `2500` | Identify: keep the combo this long after the base empties (turn still works). |
 | `ENC_STEP` | `4` | Encoder counts per menu/selector step. Lower = menu moves faster per detent. |
 
 ## Settings menu
