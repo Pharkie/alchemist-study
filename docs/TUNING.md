@@ -7,23 +7,26 @@ under `// ---- Tunables` near the top of `src/main.cpp`. Edit, then reflash:
 pio run -e c3-dev -t upload
 ```
 
-## Stir model (difficulty curve)
+## Stir model (decay vs. add)
 
-The power bar fills as you stir, with **diminishing returns toward the right**:
-`rate = kStirSpeed[level] * (1 - kStirResist[level] * progress)`. The **Stir
-Level** setting (Easy/Medium/Hard) picks the curve. Pause and the bar **drains
-gradually** (not a reset); resume and it continues. Empty + idle a while → back
-to identify. A full bar arms ("Press to brew") and holds until a press or combo
-change.
+The power bar **always drains**; turning the knob **adds** against it, with
+diminishing returns toward the top:
 
-| Constant | Default | Effect |
+    progress -= kStirDecay[level] * dt            // every tick
+    progress += kStirGain[level] * |counts| * (1 - kStirResist[level] * progress)   // on motion
+
+So you *fight the decay*, and must stir ever faster near full (where the add
+shrinks). Stop and the bar bleeds down; when it reaches zero it returns to
+identify — the decay **is** the grace, so there's no separate idle timer. A full
+bar arms ("Press to create") and holds until a press or a real combo change. The
+**Stir Level** setting picks the numbers.
+
+| Constant | Easy / Med / Hard | Effect |
 |---|---|---|
-| `kStirSpeed[]` | `0.55 / 0.48 / 0.40` | Fill rate (progress/sec) at empty, per Easy/Medium/Hard. |
-| `kStirResist[]` | `0.40 / 0.74 / 0.92` | How steeply the fill slows toward full. Higher = harder right side. |
-| `kStirDecay[]` | `0.20 / 0.24 / 0.28` | Drain/sec while paused, per level (+20%/level). |
-| `STIR_ACTIVE_MS` | `150` | Motion within this window counts as "still stirring". |
-| `STIR_IDLE_BACK_MS` | `2500` | Empty + idle this long → return to identify. |
-| `STIR_ANGLE_STEP` | `0.18` | Radians the swirl mote moves per encoder count (visual only). |
+| `kStirGain[]` | `0.060 / 0.050 / 0.042` | Bar added per encoder count (when empty). Lower = harder. |
+| `kStirResist[]` | `0.35 / 0.60 / 0.78` | How much the add shrinks toward full. Higher = brutal finish. |
+| `kStirDecay[]` | `0.15 / 0.26 / 0.40` | Bar drained per second, **always**. Higher = punishes hesitation. |
+| `STIR_ANGLE_STEP` | `0.18` | Swirl radians per encoder count (visual only). |
 
 ## Audio (needs a passive buzzer)
 
@@ -40,7 +43,7 @@ Melodies (success jingle, realm-toggle beep, "not ready" buzz) are the
 | Constant | Default | Effect |
 |---|---|---|
 | `REED_DEBOUNCE_MS` | `40` | Settle time before a reed change is committed. |
-| `LONG_PRESS_MS` | `600` | Hold duration that toggles the realm. |
+| `LONG_PRESS_MS` | `600` | Hold to leave a menu / cancel an edit. |
 | `BTN_DEBOUNCE_MS` | `30` | Minimum press to count as a short press. |
 | `RENDER_INTERVAL_MS` | `33` | Display refresh cap (~30 fps). ~30 ms is the I²C floor; lower won't help. |
 | `ENC_STEP` | `4` | Encoder counts per menu/selector step. Lower = menu moves faster per detent. |

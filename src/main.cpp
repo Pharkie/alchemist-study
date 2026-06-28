@@ -148,10 +148,8 @@ static constexpr uint32_t REED_DEBOUNCE_MS  = 40;
 static constexpr uint32_t LONG_PRESS_MS     = 600;   // hold = leave a menu / cancel an edit
 static constexpr uint32_t BTN_DEBOUNCE_MS   = 30;
 static constexpr uint32_t RENDER_INTERVAL_MS = 33;   // ~30 fps display cap
-static constexpr uint32_t REVEAL_ANIM_MS     = 1000; // phase 1: build-up animation (no name yet)
+static constexpr uint32_t REVEAL_ANIM_MS     = 1300; // phase 1: build-up animation (no name yet)
 static constexpr uint32_t REVEAL_NAME_MS     = 3000; // phase 2: hold the potion name, then idle
-static constexpr uint32_t STIR_ACTIVE_MS     = 150;  // fill/drain boundary: moved within this = fill, else drain
-static constexpr uint32_t STIR_IDLE_BACK_MS  = 2500; // empty + idle this long -> return to identify
 static constexpr uint32_t REED_GRACE_MS      = 2500; // identify: keep the combo this long after the base empties
 static constexpr float    STIR_ANGLE_STEP   = 0.18f;  // swirl radians per encoder count
 static constexpr uint16_t PITCH_MIN_HZ      = 320;
@@ -169,8 +167,9 @@ static bool g_haveDisplay = false;  // set at boot; if false we run headless
 
 // ---- Runtime state -----------------------------------------------------
 enum State { ST_IDLE, ST_IDENTIFY, ST_STIRRING, ST_REVEAL, ST_SETTINGS, ST_DIAG };
+static uint32_t g_now      = 0;            // single time source: millis() sampled once per loop
 static State    g_state    = ST_IDLE;
-static uint32_t g_stateMs  = 0;            // millis() when the current state/phase began
+static uint32_t g_stateMs  = 0;            // g_now when the current state/phase began
 static uint8_t  g_combo    = 0;            // committed combo (0..7)
 static Universe g_universe = UNI_SKYRIM;
 
@@ -195,7 +194,6 @@ static int32_t s_lastEncoder = 0;
 static float   s_stirProgress = 0.0f;      // 0..1 power bar (time-based fill)
 static float   s_swirlAngle   = 0.0f;      // radians, follows the encoder
 static bool    s_stirReady    = false;     // latched once the bar fills
-static uint32_t s_lastStirMs  = 0;         // last time the knob actually moved
 
 // reveal sub-phases (timed from g_stateMs; advancing a phase re-stamps it)
 enum RevealPhase { RP_ANIM, RP_NAME };
@@ -294,7 +292,7 @@ static uint8_t readRawCombo() {
 // in-state timing is measured as (now - g_stateMs). See docs/ARCHITECTURE.md.
 static void enterState(State s) {
   g_state = s;
-  g_stateMs = millis();
+  g_stateMs = g_now;
 }
 
 // Commit a combo as the effective one: reset the brew and pick a fresh state.
@@ -321,11 +319,13 @@ static void enterCombo(uint8_t c) {
 static void onSensedComboChange() {
   uint8_t raw = s_sensedCombo;
 
-  if (g_state == ST_SETTINGS || g_state == ST_DIAG) return;  // menus own the screen
+  // Menus and the reveal own the screen — they ignore the base entirely. REVEAL
+  // is a self-contained sequence, so a flaky reed can't disrupt it.
+  if (g_state == ST_SETTINGS || g_state == ST_DIAG || g_state == ST_REVEAL) return;
 
   if (raw == 0) {                    // base emptied: latch it; never bail instantly
     s_baseEmptied = true;
-    s_baseEmptyMs = millis();
+    s_baseEmptyMs = g_now;
     return;
   }
 
@@ -346,9 +346,9 @@ static const char* const kOnOff[] = { "Off", "On" };
 // harder the fuller (further right) the bar already is; higher levels start a
 // touch slower and slow down much more steeply toward the top.
 static const char* const  kStirLabels[] = { "Easy", "Medium", "Hard" };
-static const float        kStirSpeed[]  = { 0.55f, 0.48f, 0.40f }; // fill rate (progress/sec) at empty
-static const float        kStirResist[] = { 0.40f, 0.74f, 0.92f }; // how steeply it slows toward full
-static const float        kStirDecay[]  = { 0.20f, 0.24f, 0.28f }; // drain/sec when paused (+20%/level)
+static const float        kStirGain[]   = { 0.060f, 0.050f, 0.042f }; // bar added per encoder count (when empty)
+static const float        kStirResist[] = { 0.35f,  0.60f,  0.78f };  // adding gets this much harder toward full
+static const float        kStirDecay[]  = { 0.15f,  0.26f,  0.40f };  // bar drained per second, ALWAYS
 static constexpr int      kStirN        = 3;
 
 static void applyBrightness() {
@@ -502,9 +502,8 @@ static void updateStir(uint32_t now, uint32_t dt, int32_t d) {
     return;
   }
 
-  // Any knob motion = actively stirring; it also spins the swirl.
+  // Knob motion spins the swirl and (from identify) starts the stir.
   if (d != 0) {
-    s_lastStirMs = now;
     s_swirlAngle += STIR_ANGLE_STEP * (float)d;
     if (g_state == ST_IDENTIFY) enterState(ST_STIRRING);
   }
@@ -512,25 +511,24 @@ static void updateStir(uint32_t now, uint32_t dt, int32_t d) {
   if (s_stirReady) return;          // armed: hold the full bar until press/combo change
   if (g_state != ST_STIRRING) return;
 
-  uint32_t idle = now - s_lastStirMs;
-  if (idle < STIR_ACTIVE_MS) {
-    // Actively stirring: fill, but with diminishing returns toward the right.
-    // rate = speed * (1 - resist*progress) — higher levels slow more steeply.
-    float p = s_stirProgress;
-    float rate = kStirSpeed[g_stirLevelIdx] * (1.0f - kStirResist[g_stirLevelIdx] * p);
-    if (rate < 0.03f) rate = 0.03f;  // floor so the bar can always top out
-    s_stirProgress += rate * (float)dt / 1000.0f;
-    if (s_stirProgress >= 1.0f) { s_stirProgress = 1.0f; s_stirReady = true; }
-  } else {
-    // Paused: drain gradually (20%/sec) rather than snapping to zero, so brief
-    // hesitations barely cost progress and you resume from where it dropped.
-    s_stirProgress -= kStirDecay[g_stirLevelIdx] * (float)dt / 1000.0f;
-    if (s_stirProgress < 0.0f) s_stirProgress = 0.0f;
-    // Once fully drained and idle a while, drift back to the ingredient screen.
-    if (s_stirProgress <= 0.0f && idle >= STIR_IDLE_BACK_MS) {
-      if (s_sensedCombo != g_combo) enterCombo(s_sensedCombo);
-      else enterState(ST_IDENTIFY);
-    }
+  // The bar ALWAYS drains; stirring adds against it, with diminishing returns
+  // toward the top — so you fight the decay, and must stir ever faster near
+  // full. The decay itself is the "grace": stop and it bleeds down, returning
+  // to identify only once it hits zero.
+  const int lvl = g_stirLevelIdx;
+  s_stirProgress -= kStirDecay[lvl] * (float)dt / 1000.0f;
+  if (d != 0) {
+    int ad = (d < 0) ? -d : d;
+    s_stirProgress += kStirGain[lvl] * (float)ad * (1.0f - kStirResist[lvl] * s_stirProgress);
+  }
+
+  if (s_stirProgress >= 1.0f) {
+    s_stirProgress = 1.0f;
+    s_stirReady = true;
+  } else if (s_stirProgress <= 0.0f) {
+    s_stirProgress = 0.0f;
+    if (s_sensedCombo != g_combo) enterCombo(s_sensedCombo);  // base changed -> resync
+    else enterState(ST_IDENTIFY);                             // drained -> back to identify
   }
 }
 
@@ -925,7 +923,7 @@ static void renderDiag() {
 
 static void render() {
   if (!g_haveDisplay) return;  // headless: skip drawing if no panel on the bus
-  uint32_t now = millis();
+  uint32_t now = g_now;        // same clock everything else uses this tick
   switch (g_state) {
     case ST_IDLE:     renderIdle(now);     break;
     case ST_IDENTIFY: renderIdentify(now); break;
@@ -1009,12 +1007,14 @@ void setup() {
   Serial.println("--------------------");
 
   s_lastEncoder = g_encoderCount;
-  s_lastLoopMs = millis();
+  g_now = millis();
+  s_lastLoopMs = g_now;
   render();  // first paint (idle)
 }
 
 void loop() {
-  uint32_t now = millis();
+  g_now = millis();            // one time source for the whole tick
+  uint32_t now = g_now;
   uint32_t dt = now - s_lastLoopMs;
   s_lastLoopMs = now;
 

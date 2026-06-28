@@ -13,10 +13,13 @@ conventions exist to make that class of bug impossible. Follow them.
 
 ## The four rules
 
-1. **One transition point.** `enterState(s)` is the *only* place `g_state`
-   changes. It also stamps `g_stateMs = millis()`. Never write `g_state = …`
-   anywhere else. Data-carrying transitions (`enterCombo()`) and the reveal
-   phase advance go through it.
+1. **One transition point, one clock.** `enterState(s)` is the *only* place
+   `g_state` changes; it stamps `g_stateMs = g_now`. `g_now` is `millis()`
+   sampled **once per loop** — every timer in the tick (state entry, render,
+   updates) uses that single value, so `now - g_stateMs` can never underflow
+   from two `millis()` calls crossing. Never write `g_state = …` anywhere else.
+   Data-carrying transitions (`enterCombo()`) and the reveal phase advance go
+   through it.
 
 2. **Time-in-state, never cross-timers.** Measure every duration as
    `now - g_stateMs`. Do **not** anchor a duration to one event and a later
@@ -47,9 +50,10 @@ conventions exist to make that class of bug impossible. Follow them.
      with a timestamp; only after `REED_GRACE_MS` does IDENTIFY fall back to
      idle — so turning still starts the (latched) stir during the cooldown after
      a magnet leaves. Once STIRRING/REVEAL, the combo is fully latched.
-   - **Stir:** `STIR_ACTIVE_MS` is the fill/drain boundary (moved within it =
-     filling), `STIR_DECAY_PER_S` is the drain rate, `STIR_IDLE_BACK_MS` is the
-     give-up timeout. Three distinct jobs, no overlap.
+   - **Stir:** the bar *always* drains (`kStirDecay`); turning *adds* against it
+     (`kStirGain`, shrinking toward full via `kStirResist`). No fill/drain mode
+     flag and no give-up timer — the decay itself is the grace, and the bar
+     hitting zero is the transition back to identify.
 
 ## Adding behaviour
 
