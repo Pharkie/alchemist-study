@@ -90,8 +90,8 @@ States: **IDLE → IDENTIFY → STIRRING → REVEAL**
   sets how steeply it slows toward the right), with a swirling vortex + rising
   trill (~320→1100 Hz). **Pause and the bar drains gradually (~20%/sec)** rather
   than resetting; once empty and idle a while (~2.5 s) it drifts back to IDENTIFY.
-  When the bar fills it **arms** ("Press to brew") and holds until a press or a
-  real combo change.
+  When the bar fills, the whole screen becomes a framed **"Press to create"**
+  call-to-action (held until a press or a real combo change).
 - **REVEAL** — one of **three random full-screen animations** (starburst /
   rising bubbles / expanding rings) reveals the potion name (wrapped to two lines
   if wide) over a short ascending jingle. After ~3 s it auto-returns to IDLE

@@ -555,20 +555,6 @@ static void drawTwinkles(uint32_t now) {
   }
 }
 
-// A "Press to brew" call-to-action as a glowing rounded pill with sparkles.
-static void drawBrewPill(int y) {
-  const char* t = "Press to brew";
-  oled.setFont(u8g2_font_helvR08_tr);
-  int w = oled.getStrWidth(t);
-  int bx = (128 - w) / 2 - 6;
-  oled.drawRBox(bx, y, w + 12, 11, 3);
-  oled.setDrawColor(0);
-  oled.drawStr((128 - w) / 2, y + 8, t);
-  oled.setDrawColor(1);
-  drawSparkle(bx - 4, y + 5, 1);
-  drawSparkle(bx + w + 15, y + 5, 1);
-}
-
 static void drawCornerSparkles(uint32_t now) {
   int r = ((now / 300) & 1) ? 1 : 0;
   drawSparkle(9, 10, r);  drawSparkle(118, 10, r);
@@ -669,6 +655,24 @@ static void renderIdentify(uint32_t now) {
 
 static void renderStirring(uint32_t now) {
   oled.clearBuffer();
+
+  // Bar full: a dedicated full-screen "ready to brew" call-to-action.
+  if (s_stirReady) {
+    drawFancyFrame();
+    int sr = ((now / 200) & 1) ? 2 : 1;
+    drawSparkle(15, 14, sr);  drawSparkle(113, 14, sr);
+    drawSparkle(15, 50, sr);  drawSparkle(113, 50, sr);
+    oled.setFont(u8g2_font_helvR08_tr);
+    drawCenteredF("potion ready", 14);
+    oled.setFont(u8g2_font_ncenB12_tr);
+    drawCenteredF("Press to", 36);
+    drawCenteredF("create", 52);
+    drawSparkle(28, 45, sr);  drawSparkle(100, 45, sr);
+    oled.sendBuffer();
+    return;
+  }
+
+  // Otherwise: the brewing vortex + power bar.
   const int cx = 64, cy = 23;
   const int Rout = 16;
 
@@ -703,27 +707,14 @@ static void renderStirring(uint32_t now) {
     else             oled.drawPixel(x, yy);
   }
 
-  if (s_stirReady) {
-    for (int i = 0; i < 3; i++) {
-      float a = s_swirlAngle * 0.5f + i * 2.094f;
-      int x = cx + (int)lroundf((Rout + 4) * cosf(a));
-      int yy = cy + (int)lroundf((Rout + 4) * sinf(a));
-      drawSparkle(x, yy, ((now / 150 + i) & 1) ? 1 : 2);
-    }
-  }
-
-  // Power bar — fills over the configured stir time; empties if you pause.
+  // Power bar — fills as you stir, drains gently if you pause.
   const int bx = 14, by = 41, bw = 100, bh = 10;
   oled.drawFrame(bx, by, bw, bh);
   int fill = (int)lroundf((float)(bw - 4) * s_stirProgress);
   if (fill > 0) oled.drawBox(bx + 2, by + 2, fill, bh - 4);
 
-  if (s_stirReady) {
-    drawBrewPill(52);
-  } else {
-    oled.setFont(u8g2_font_5x8_tr);
-    drawCenteredF("keep stirring", 62);
-  }
+  oled.setFont(u8g2_font_5x8_tr);
+  drawCenteredF("keep stirring", 62);
   oled.sendBuffer();
 }
 
@@ -737,40 +728,45 @@ static void drawPotionName(const char* name) {
 }
 
 // --- Reveal animations: three styles, picked at random per brew ----------
-// Style 0: sparkles burst outward (elliptical) from the centre.
+// Each plays for ~0.9 s BEFORE the name appears, so it reads as a build-up.
+//
+// Style 0: a dense sparkle starburst exploding outward (elliptical).
 static void animStarburst(uint32_t since) {
-  float p = (float)since / 1100.0f;
+  float p = (float)since / 900.0f;
   if (p > 1.0f) p = 1.0f;
-  for (int i = 0; i < 12; i++) {
-    float a = i * 0.5236f + p * 1.6f;
-    float rad = 5.0f + p * 56.0f;
+  for (int i = 0; i < 18; i++) {
+    float a = i * 0.349f + p * 1.4f;
+    float rad = 4.0f + p * 60.0f;
     int x = 64 + (int)lroundf(rad * cosf(a));
-    int y = 33 + (int)lroundf(rad * sinf(a) * 0.5f);
-    int r = 2 - (int)(p * 2.0f);
+    int y = 33 + (int)lroundf(rad * sinf(a) * 0.46f);
+    int r = 3 - (int)(p * 3.0f);           // start big, shrink as they fly out
     if (x > 5 && x < 123 && y > 5 && y < 59) drawSparkle(x, y, r < 0 ? 0 : r);
   }
 }
 
 // Style 1: a brew surge — bubbles rise from the bottom and grow as they climb.
 static void animBubbles(uint32_t since) {
-  for (int i = 0; i < 9; i++) {
-    int t = (int)since - i * 45;
-    if (t < 0 || t > 850) continue;
-    float f = (float)t / 850.0f;
-    int x = 12 + i * 13 + (int)lroundf(3.0f * sinf((float)t * 0.02f));
-    int y = 57 - (int)lroundf(f * 50.0f);
-    int r = 1 + (int)lroundf(f * 2.0f);
-    if (y > 4) oled.drawCircle(x, y, r);
+  for (int i = 0; i < 12; i++) {
+    int t = (int)since - i * 30;
+    if (t < 0 || t > 820) continue;
+    float f = (float)t / 820.0f;
+    int x = 9 + i * 10 + (int)lroundf(3.0f * sinf((float)t * 0.025f));
+    int y = 57 - (int)lroundf(f * 52.0f);
+    int r = 1 + (int)lroundf(f * 3.0f);
+    if (y > 4 && x > 5 && x < 123) oled.drawCircle(x, y, r);
   }
 }
 
-// Style 2: magic pulse — concentric rings expand outward from the centre.
+// Style 2: magic pulse — bold concentric rings expand outward from the centre.
 static void animRings(uint32_t since) {
-  for (int k = 0; k < 3; k++) {
-    int t = (int)since - k * 200;
+  for (int k = 0; k < 4; k++) {
+    int t = (int)since - k * 150;
     if (t < 0) continue;
-    int rad = (int)((float)t * 0.062f);
-    if (rad > 2 && rad < 62) oled.drawCircle(64, 33, rad);
+    int rad = (int)((float)t * 0.075f);
+    if (rad > 2 && rad < 64) {
+      oled.drawCircle(64, 33, rad);
+      if (rad < 63) oled.drawCircle(64, 33, rad + 1);   // doubled for visibility
+    }
   }
 }
 
@@ -793,8 +789,9 @@ static void renderReveal(uint32_t now) {
     drawSparkle(11, 53, r); drawSparkle(117, 53, r);
   }
 
-  // The name reveals partway through each animation, then stays put.
-  uint32_t nameAt = (s_revealStyle == 1) ? 600 : (s_revealStyle == 2) ? 480 : 320;
+  // The name appears only AFTER the build-up animation has played (~0.9 s),
+  // so the animation reads as a distinct pre-reveal flourish.
+  const uint32_t nameAt = 900;
   if (since >= nameAt) {
     oled.drawHLine(44, 15, 40);
     drawDiamond(40, 15);
