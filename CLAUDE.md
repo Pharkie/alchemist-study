@@ -85,15 +85,17 @@ States: **IDLE → IDENTIFY → STIRRING → REVEAL**
 - **IDENTIFY** — ≥1 bottle seated. **Features** the ingredient name(s) in an
   elegant serif with sparkles (a single ingredient large, two/three as a flanked
   list); no realm header. A subtle "turn to stir" cue.
-- **STIRRING** — encoder is turning. A **power bar** fills as you stir, getting
-  **harder the fuller it gets** (the **Stir Level** setting — Easy/Medium/Hard —
-  sets how steeply it slows toward the right), with a swirling vortex + rising
-  trill (~320→1100 Hz). **Pause and the bar drains gradually (~20%/sec)** rather
-  than resetting; once empty and idle a while (~2.5 s) it drifts back to IDENTIFY.
-  When the bar fills, the whole screen becomes a framed **"Press to create"**
-  call-to-action (held until a press or a real combo change).
-- **REVEAL** — one of **three random full-screen animations** (starburst /
-  rising bubbles / expanding rings) reveals the potion name (wrapped to two lines
+- **STIRRING** — encoder is turning. A **power bar** fills as you stir, with a
+  swirling vortex + rising trill (~320→1100 Hz). The add rate is **capped**, so
+  spinning faster can't rush it — each **Stir Level** (Easy/Medium/Hard) has a
+  guaranteed **minimum fill time** (~3 / 5 / 10 s; see [docs/TUNING.md](docs/TUNING.md)).
+  An escalating **caption** climbs with the bar (random brew-themed lines per band
+  at <50 / <75 / <90 / ≥90 %). The bar **always drains** (faster on harder levels);
+  pause and it bleeds down, and once empty it waits a ~3 s grace before drifting
+  back to IDENTIFY. When the bar fills, the whole screen becomes a framed
+  **"Press to create"** call-to-action (held until a press or a real combo change).
+- **REVEAL** — one of **three random full-screen animations** (radar sweep /
+  rising liquid / expanding rings) reveals the potion name (wrapped to two lines
   if wide) over a short ascending jingle. After ~3 s it auto-returns to IDLE
   ("Place ingredients"), ready for the next brew.
 
