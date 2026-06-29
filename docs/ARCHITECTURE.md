@@ -55,6 +55,16 @@ conventions exist to make that class of bug impossible. Follow them.
      flag and no give-up timer — the decay itself is the grace, and the bar
      hitting zero is the transition back to identify.
 
+5. **Never block the loop — especially USB-CDC `Serial`.** No long `delay()`s in
+   the loop. Critically, on the ESP32-C3 `Serial.print/printf` over USB-CDC
+   **blocks until a host drains the port** — with no monitor attached it stalls
+   the whole loop for up to *seconds*. `setup()` calls `Serial.setTxTimeoutMs(0)`
+   to make logging non-blocking (drops bytes if nobody's listening); keep that.
+   This caused a long-hunted "reveal animation freezes / input lags" bug — and a
+   serial capture *hides* it, because capturing drains the port. So: if an
+   on-screen symptom appears only when **not** being observed over serial,
+   suspect CDC back-pressure on the loop.
+
 ## Adding behaviour
 
 - New screen/mode → add a `State`, transition in via `enterState()`, give it an

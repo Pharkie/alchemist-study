@@ -197,6 +197,30 @@ static float   s_swirlAngle   = 0.0f;      // radians, follows the encoder
 static bool    s_stirReady    = false;     // latched once the bar fills
 static uint32_t s_stirZeroMs  = 0;         // last time the bar was non-empty (zero-grace timer)
 
+// Flavour text shown while stirring, escalating as the bar fills. The band is
+// chosen by progress (<50 / <75 / <90 / >=90 %); a random line from that band
+// is picked whenever the band changes (update*() picks, render*() just draws).
+static const char* const kStirEarly[] = {
+  "start stirring", "round and round", "coax the brew", "wake the cauldron",
+  "rouse the mixture", "get it swirling", "stir it up", "summon the swirl",
+};
+static const char* const kStirMid[] = {
+  "keep going", "halfway there", "it's bubbling", "building power",
+  "the magic stirs", "don't stop now", "feel it churn", "the brew quickens",
+};
+static const char* const kStirLate[] = {
+  "not long now", "nearly there", "almost brewed", "gathering force",
+  "so close", "hold the rhythm", "keep it up", "the potion wakes",
+};
+static const char* const kStirFinal[] = {
+  "another few goes", "one last push", "almost potion!", "final swirls",
+  "to the brim!", "nearly potion!", "give it everything", "don't quit now!",
+};
+static const char* const* const kStirPools[4] = { kStirEarly, kStirMid, kStirLate, kStirFinal };
+static const uint8_t kStirPoolN[4] = { 8, 8, 8, 8 };
+static int         s_stirMsgBand = -1;                 // current band (-1 = unset)
+static const char* s_stirMsg     = kStirEarly[0];      // line currently shown
+
 // reveal sub-phases (timed from g_stateMs; advancing a phase re-stamps it)
 enum RevealPhase { RP_ANIM, RP_NAME };
 static RevealPhase s_revealPhase = RP_ANIM;
@@ -513,7 +537,7 @@ static void updateStir(uint32_t now, uint32_t dt, int32_t d) {
   // Knob motion spins the swirl and (from identify) starts the stir.
   if (d != 0) {
     s_swirlAngle += STIR_ANGLE_STEP * (float)d;
-    if (g_state == ST_IDENTIFY) { enterState(ST_STIRRING); s_stirZeroMs = now; }
+    if (g_state == ST_IDENTIFY) { enterState(ST_STIRRING); s_stirZeroMs = now; s_stirMsgBand = -1; }
   }
 
   if (s_stirReady) return;          // armed: hold the full bar until press/combo change
@@ -540,6 +564,14 @@ static void updateStir(uint32_t now, uint32_t dt, int32_t d) {
   if (addRate > kStirCap[lvl]) addRate = kStirCap[lvl];
   s_stirProgress += addRate * (1.0f - kStirResist[lvl] * s_stirProgress) * (float)dt / 1000.0f;
   s_stirProgress -= kStirDecay[lvl] * (float)dt / 1000.0f;
+
+  // Escalating stir text: pick a fresh random line each time the band changes.
+  int band = s_stirProgress >= 0.90f ? 3 : s_stirProgress >= 0.75f ? 2
+           : s_stirProgress >= 0.50f ? 1 : 0;
+  if (band != s_stirMsgBand) {
+    s_stirMsgBand = band;
+    s_stirMsg = kStirPools[band][esp_random() % kStirPoolN[band]];
+  }
 
   if (s_stirProgress >= 1.0f) {
     s_stirProgress = 1.0f;
@@ -768,7 +800,7 @@ static void renderStirring(uint32_t now) {
   if (fill > 0) oled.drawBox(bx + 2, by + 2, fill, bh - 4);
 
   oled.setFont(u8g2_font_5x8_tr);
-  drawCenteredF("keep stirring", 62);
+  drawCenteredF(s_stirMsg, 62);
   oled.sendBuffer();
 }
 
