@@ -544,7 +544,6 @@ static void updateStir(uint32_t now, uint32_t dt, int32_t d) {
   if (s_stirProgress >= 1.0f) {
     s_stirProgress = 1.0f;
     s_stirReady = true;
-    Serial.printf("[stir] FILLED lvl=%d in %lums\n", lvl, (unsigned long)(now - g_stateMs));
   } else if (s_stirProgress > 0.0f) {
     s_stirZeroMs = now;                  // still brewing — keep the grace clock fresh
   } else {
@@ -798,15 +797,16 @@ static void animStarburst(uint32_t el) {
   oled.drawDisc(64, 33, 2);
 }
 
-// Style 1: brewing surge — liquid rises from the bottom with a rippling top.
+// Style 1: brewing surge — liquid rises from the bottom and fills the screen.
 static void animBubbles(uint32_t el) {
-  float p = (float)el / (float)REVEAL_ANIM_MS;
+  float p = (float)el / (float)REVEAL_ANIM_MS * 1.2f;   // reach full a touch early, then hold
   if (p > 1.0f) p = 1.0f;
-  int base = 60 - (int)lroundf(p * 54.0f);     // surface climbs y60 -> y6
-  for (int x = 5; x < 123; x++) {
+  int base = 63 - (int)lroundf(p * 63.0f);             // surface climbs all the way to the top
+  for (int x = 2; x < 126; x++) {
     int surf = base + (int)lroundf(2.5f * sinf((float)x * 0.22f + (float)el * 0.010f));
-    for (int y = surf; y < 61; y++)
-      if (((x + y) & 1) == 0) oled.drawPixel(x, y);   // dithered fill
+    if (surf < 0) surf = 0;
+    for (int y = surf; y < 64; y++)
+      if (((x + y) & 1) == 0) oled.drawPixel(x, y);    // dithered fill
   }
 }
 
@@ -995,6 +995,7 @@ void setup() {
   Wire.setPins(PIN_OLED_SDA, PIN_OLED_SCL);
   oled.setBusClock(400000);
   oled.begin();
+  Wire.setClock(400000);   // force 400kHz — setBusClock alone leaves it at 100kHz
 
   // Probe for the panel; if absent/miswired, run headless (skip drawing so we
   // don't flood the log with ESP_ERR_INVALID_STATE every frame).
