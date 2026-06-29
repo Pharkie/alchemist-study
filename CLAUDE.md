@@ -129,13 +129,19 @@ to start editing a value, **turn** to change it (live), **press** to confirm;
 - **Mute** — Off / On (gates all audio: chime, trill, jingles, error beep)
 - **Bright** — 1–5 (OLED contrast via `setContrast`)
 - **Stir Level** — Easy / Medium / Hard (fill difficulty curve)
+- **Sleep** — screen-blank timeout: Never / 10s / 1m / 5m / 30m. The OLED powers
+  down (`setPowerSave`) after that long with no input and wakes on any encoder /
+  reed / button activity (the waking gesture is swallowed so it doesn't also act).
 - **Hardware Test** — opens a built-in live diagnostic (`ST_DIAG`): reed/button
   boxes + encoder count; long-press to return. (Same idea as the `c3-hwcheck`
   build, but in-firmware so it needs no reflash.)
 - **Firmware** — shows the version string
 - **Exit** — back to idle
 
-Mute and Brightness persist to NVS alongside the universe.
+Realm, Mute, Brightness, Stir Level and Sleep all persist to NVS.
+
+On boot, an animated ~3 s splash ("Welcome to the Alchemist's Study", growing
+title + rising sparkle-chime, gated by Mute) plays before the idle screen.
 
 ## Potion lookup — index by combo `1..7` (`0` = idle)
 

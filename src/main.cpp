@@ -178,6 +178,9 @@ static Universe g_universe = UNI_SKYRIM;
 static bool     g_mute        = false;
 static uint8_t  g_brightness  = 3;         // 1..5
 static uint8_t  g_stirLevelIdx = 1;        // index into kStirLabels (Easy/Medium/Hard)
+static uint8_t  g_blankIdx     = 0;        // screen-blank timeout (index into kBlankMs/kBlankLabels)
+static uint32_t g_lastActivityMs = 0;      // last input (encoder/reed/button), for blanking
+static bool     g_screenOff    = false;    // true while the panel is blanked (asleep)
 static int      s_menuIdx     = 0;         // highlighted settings item
 static bool     s_menuEditing = false;     // true while adjusting the highlighted item
 static int32_t  s_navAccum    = 0;         // encoder accumulator for discrete steps
@@ -229,6 +232,7 @@ static RevealPhase s_revealPhase = RP_ANIM;
 static bool     s_btnDown   = false;
 static uint32_t s_btnDownMs = 0;
 static bool     s_longFired = false;
+static bool     s_btnSwallow = false;      // ignore the press that woke the screen, until release
 
 // timing
 static uint32_t s_lastLoopMs   = 0;
@@ -399,6 +403,14 @@ static void setBright(int v) { g_brightness = (uint8_t)v; prefs.putUChar("bright
 static int  getStirLevel()    { return g_stirLevelIdx; }
 static void setStirLevel(int v){ g_stirLevelIdx = (uint8_t)v; prefs.putUChar("stirlvl", g_stirLevelIdx); }
 
+// Screen-blank (screensaver) timeout. Index 0 = Never; the panel powers down
+// after this much input idle and wakes on any encoder/reed/button activity.
+static const char* const kBlankLabels[] = { "Never", "10s", "1m", "5m", "30m" };
+static const uint32_t    kBlankMs[]     = { 0, 10000UL, 60000UL, 300000UL, 1800000UL };
+static constexpr int     kBlankN        = 5;
+static int  getBlank()       { return g_blankIdx; }
+static void setBlank(int v)  { g_blankIdx = (uint8_t)v; prefs.putUChar("blank", g_blankIdx); }
+
 static void settingsEnter() { s_menuIdx = 0; s_navAccum = 0; s_menuEditing = false; enterState(ST_SETTINGS); }
 static void settingsExit()  { s_navAccum = 0; s_menuEditing = false; enterState(ST_IDLE); }
 static void diagEnter()     { s_navAccum = 0; s_menuEditing = false; enterState(ST_DIAG); }
@@ -421,6 +433,7 @@ static const MenuItem kMenu[] = {
   { "Mute",         K_CHOICE, getMute,   setMute,   kOnOff,        2,         0, 0, nullptr,    nullptr      },
   { "Bright",       K_RANGE,  getBright,   setBright,   nullptr,     0,      1, 5, nullptr,    nullptr      },
   { "Stir Level",   K_CHOICE, getStirLevel, setStirLevel, kStirLabels, kStirN, 0, 0, nullptr,  nullptr      },
+  { "Sleep",        K_CHOICE, getBlank,  setBlank,  kBlankLabels,  kBlankN,   0, 0, nullptr,    nullptr      },
   { "Hardware Test",K_ACTION, nullptr,   nullptr,   nullptr,       0,         0, 0, nullptr,    diagEnter    },
   { "Firmware",     K_INFO,   nullptr,   nullptr,   nullptr,       0,         0, 0, FW_VERSION, nullptr      },
   { "Exit",         K_ACTION, nullptr,   nullptr,   nullptr,       0,         0, 0, nullptr,    settingsExit },
@@ -506,6 +519,10 @@ static void onLongPress(uint32_t now) {
 
 static void updateButton(uint32_t now) {
   bool pressed = (digitalRead(PIN_ENC_SW) == LOW);
+  if (s_btnSwallow) {                 // this press only woke the screen — ignore it
+    if (!pressed) { s_btnSwallow = false; s_btnDown = false; s_longFired = false; }
+    return;
+  }
   if (pressed && !s_btnDown) {
     s_btnDown = true;
     s_btnDownMs = now;
@@ -982,6 +999,88 @@ static void render() {
   }
 }
 
+// Animated boot splash (~3s): the scene materialises from emanating rings, a
+// starfield twinkles, "Welcome to the" slides in, "Alchemist's Study" grows in
+// big, then motes orbit the title — all over a rising sparkle-chime. Boot-only,
+// so the blocking delays here are fine (we're not in the main loop yet).
+static void bootSplash() {
+  if (!g_haveDisplay) return;
+
+  static const uint8_t sx[12] = { 9, 119, 11, 117, 30, 98, 64, 20, 108, 64, 44, 84 };
+  static const uint8_t sy[12] = { 11, 11, 53, 53, 7, 7, 5, 58, 58, 60, 6, 6 };
+  auto stars = [&](int f) {                       // twinkle the scattered stars
+    for (int i = 0; i < 12; i++) {
+      int ph = (f + i * 5) & 7;
+      int r = ph < 2 ? 2 : ph < 4 ? 1 : 0;
+      if (r) drawSparkle(sx[i], sy[i], r);
+    }
+  };
+  auto title = [&](const uint8_t* font, int wy) {  // welcome (sliding) + grown title
+    oled.setFont(u8g2_font_helvR08_tr);
+    drawCenteredF("Welcome to the", wy);
+    oled.setFont(font);
+    drawCenteredF("Alchemist's", 38);
+    drawCenteredF("Study", 57);
+  };
+
+  // Phase 1: rings emanate from the centre as the scene materialises (~0.7s).
+  for (int f = 0; f < 12; f++) {
+    oled.clearBuffer();
+    for (int k = 0; k < 3; k++) {
+      int rad = (f * 5 + k * 16) % 48;
+      if (rad > 2 && rad < 47) oled.drawCircle(64, 32, rad);
+    }
+    stars(f);
+    oled.sendBuffer();
+    if (!g_mute && f == 0) tone(PIN_BUZZER, 392);   // G4
+    if (!g_mute && f == 6) tone(PIN_BUZZER, 523);   // C5
+    delay(58);
+  }
+
+  // Phase 2: the frame draws on; "Welcome to the" slides down into place (~0.5s).
+  for (int f = 0; f <= 10; f++) {
+    oled.clearBuffer();
+    drawFancyFrame();
+    title(u8g2_font_ncenR08_tr, -4 + (17 * f) / 10);  // welcome slides -4 -> 13
+    stars(f + 12);
+    oled.sendBuffer();
+    if (!g_mute && f == 0) tone(PIN_BUZZER, 587);   // D5
+    delay(46);
+  }
+
+  // Phase 3: the title grows through serif sizes with a rising chime (~0.85s).
+  const uint8_t* grow[4] = { u8g2_font_ncenR08_tr, u8g2_font_ncenB10_tr,
+                             u8g2_font_ncenB12_tr, u8g2_font_ncenB14_tr };
+  const int notes[4] = { 659, 784, 880, 1047 };     // E5 G5 A5 C6
+  for (int s = 0; s < 4; s++) {
+    for (int rep = 0; rep < 4; rep++) {
+      oled.clearBuffer();
+      drawFancyFrame();
+      title(grow[s], 13);
+      stars(s * 4 + rep);
+      oled.sendBuffer();
+      delay(52);
+    }
+    if (!g_mute) tone(PIN_BUZZER, notes[s]);
+  }
+
+  // Phase 4: hold with motes orbiting the title, then a final flourish (~0.9s).
+  for (int f = 0; f < 16; f++) {
+    oled.clearBuffer();
+    drawFancyFrame();
+    title(u8g2_font_ncenB14_tr, 13);
+    stars(f);
+    float a = (float)f * 0.45f;
+    oled.drawDisc(64 + (int)lroundf(52.0f * cosf(a)), 32 + (int)lroundf(24.0f * sinf(a)), 1);
+    oled.drawDisc(64 - (int)lroundf(52.0f * cosf(a)), 32 - (int)lroundf(24.0f * sinf(a)), 1);
+    oled.sendBuffer();
+    if (!g_mute && f == 1) tone(PIN_BUZZER, 1319);  // E6 sparkle
+    if (!g_mute && f == 6) tone(PIN_BUZZER, 1047);  // settle on C6
+    delay(56);
+  }
+  noTone(PIN_BUZZER);
+}
+
 // ---- Arduino entry points ----------------------------------------------
 void setup() {
   Serial.begin(115200);
@@ -1017,13 +1116,8 @@ void setup() {
   if (g_brightness > 5) g_brightness = 5;
   g_stirLevelIdx = prefs.getUChar("stirlvl", 1);
   if (g_stirLevelIdx >= kStirN) g_stirLevelIdx = 1;
-
-  // Boot chime: a rising two-note "awake" signal (also a buzzer test).
-  if (!g_mute) {
-    tone(PIN_BUZZER, 660); delay(120);
-    tone(PIN_BUZZER, 990); delay(150);
-    noTone(PIN_BUZZER);
-  }
+  g_blankIdx   = prefs.getUChar("blank", 0);
+  if (g_blankIdx >= kBlankN) g_blankIdx = 0;
 
   // OLED. Let U8g2 own the single Wire.begin(); we only preset the C3's I2C
   // pins (calling Wire.begin() ourselves AND letting U8g2 begin() again wedges
@@ -1059,9 +1153,12 @@ void setup() {
   }
   Serial.println("--------------------");
 
+  bootSplash();   // animated welcome + rising chime, then on to idle
+
   s_lastEncoder = g_encoderCount;
   g_now = millis();
   s_lastLoopMs = g_now;
+  g_lastActivityMs = g_now;
   render();  // first paint (idle)
 }
 
@@ -1073,7 +1170,8 @@ void loop() {
 
   // Inputs: debounced reed combo, encoder/stir, button.
   uint8_t raw = readRawCombo();
-  if (raw != s_rawComboLast) {
+  bool reedAct = (raw != s_rawComboLast);
+  if (reedAct) {
     s_rawComboLast = raw;
     s_comboChangeMs = now;
   }
@@ -1086,6 +1184,21 @@ void loop() {
   int32_t cnt = g_encoderCount;
   int32_t d = cnt - s_lastEncoder;
   s_lastEncoder = cnt;
+
+  // Screen blanking: any encoder/reed/button input resets the idle timer and
+  // wakes the panel. The gesture that wakes is swallowed (turn -> no stir,
+  // press -> no menu) so waking doesn't also trigger an action.
+  bool btnAct = (digitalRead(PIN_ENC_SW) == LOW);
+  if (reedAct || d != 0 || btnAct) {
+    g_lastActivityMs = now;
+    if (g_screenOff) {
+      if (g_haveDisplay) oled.setPowerSave(0);   // wake the panel
+      g_screenOff = false;
+      d = 0;                                      // swallow wake-turn
+      if (btnAct) { s_btnSwallow = true; s_btnDown = true; }  // swallow wake-press
+    }
+  }
+
   switch (g_state) {
     case ST_IDENTIFY:
     case ST_STIRRING: updateStir(now, dt, d);     break;
@@ -1097,7 +1210,14 @@ void loop() {
   updateButton(now);
   updateAudio(now);
 
-  if (now - s_lastRenderMs >= RENDER_INTERVAL_MS) {
+  // Blank the panel after the configured idle period (Settings -> Sleep).
+  uint32_t blankMs = kBlankMs[g_blankIdx];
+  if (blankMs && !g_screenOff && (uint32_t)(now - g_lastActivityMs) >= blankMs) {
+    if (g_haveDisplay) oled.setPowerSave(1);   // panel off; buffer retained
+    g_screenOff = true;
+  }
+
+  if (!g_screenOff && now - s_lastRenderMs >= RENDER_INTERVAL_MS) {
     s_lastRenderMs = now;
     render();
   }

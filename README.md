@@ -17,8 +17,9 @@ Runs fully offline — no WiFi, no accounts, no configuration.
 3. **Brew** — once the bar is full, press the knob: one of three random full-screen
    animations reveals the potion, with a success jingle.
 4. **Settings** — press on the idle screen: **Realm**, **Mute**, **Brightness**,
-   **Stir Level** (Easy/Medium/Hard), **Hardware Test**, **Firmware**. Turn to move,
-   press to edit a value, turn to change, press to confirm. Settings persist (NVS).
+   **Stir Level** (Easy/Medium/Hard), **Sleep** (screen-blank timeout), **Hardware
+   Test**, **Firmware**. Turn to move, press to edit a value, turn to change, press
+   to confirm. Settings persist (NVS).
 
 Three bottles give seven combinations (3 singles + 3 pairs + 1 triple) → seven
 potions per realm.
