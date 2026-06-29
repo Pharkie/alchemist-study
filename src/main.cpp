@@ -711,6 +711,11 @@ static void renderIdle(uint32_t now) {
   oled.sendBuffer();
 }
 
+static const char* ordinalWord(int i) {   // 0,1,2 -> position among seated bottles
+  static const char* const w[3] = { "First ingredient", "Second ingredient", "Third ingredient" };
+  return (i >= 0 && i < 3) ? w[i] : "";
+}
+
 static void renderIdentify(uint32_t now) {
   oled.clearBuffer();
   drawCornerSparkles(now);
@@ -719,34 +724,43 @@ static void renderIdentify(uint32_t now) {
   for (int s = 0; s < 3; s++) if (g_combo & (1 << s)) { count++; if (first < 0) first = s; }
 
   if (count == 1) {
-    // Feature the single ingredient large, with flanking sparkles.
+    // One ingredient: small "First ingredient" caption above a large name.
+    oled.setFont(u8g2_font_5x8_tr);
+    drawCenteredF("First ingredient", 13);
     static const uint8_t* const fonts[] = {
       u8g2_font_ncenB14_tr, u8g2_font_ncenB12_tr, u8g2_font_ncenB10_tr
     };
-    drawFitted(kIngredients[g_universe][first], fonts, 3, 110, 35, 29, 45);
+    drawFitted(kIngredients[g_universe][first], fonts, 3, 110, 42, 36, 52);
     int sr = ((now / 220) & 1) ? 2 : 1;
-    drawSparkle(7, 34, sr);
-    drawSparkle(121, 34, sr);
+    drawSparkle(7, 40, sr);
+    drawSparkle(121, 40, sr);
   } else {
-    // Two or three ingredients: an elegant serif list, each flanked by a
-    // diamond, vertically centred for the count.
-    oled.setFont(u8g2_font_ncenB10_tr);
-    bool fits = true;
+    // Two/three ingredients: a small ordinal caption above each name, so it's
+    // clear the ingredients STACK (you're building a combo, not replacing).
+    const uint8_t* labelFont = (count == 3) ? u8g2_font_4x6_tr     : u8g2_font_5x8_tr;
+    const uint8_t* nameFont  = (count == 3) ? u8g2_font_helvB08_tr : u8g2_font_ncenB10_tr;
+    oled.setFont(nameFont);
     for (int s = 0; s < 3; s++)
-      if ((g_combo & (1 << s)) && oled.getStrWidth(kIngredients[g_universe][s]) > 104) fits = false;
-    if (!fits) oled.setFont(u8g2_font_helvB08_tr);
+      if ((g_combo & (1 << s)) && oled.getStrWidth(kIngredients[g_universe][s]) > 116)
+        nameFont = u8g2_font_helvB08_tr;
 
-    int y = (count == 2) ? 30 : 24;
+    int y      = (count == 2) ? 16 : 9;    // first caption baseline
+    int nameDy = (count == 2) ? 11 : 8;    // name baseline below its caption
+    int blockH = (count == 2) ? 24 : 17;   // per-ingredient row height
+    int ord = 0;
     for (int s = 0; s < 3; s++) {
-      if (g_combo & (1 << s)) {
-        const char* nm = kIngredients[g_universe][s];
-        int w = oled.getStrWidth(nm);
-        int x = (128 - w) / 2;
-        drawDiamond(x - 7, y - 3);
-        oled.drawStr(x, y, nm);
-        drawDiamond(x + w + 5, y - 3);
-        y += (count == 2) ? 16 : 13;
-      }
+      if (!(g_combo & (1 << s))) continue;
+      oled.setFont(labelFont);
+      drawCenteredF(ordinalWord(ord), y);
+      oled.setFont(nameFont);
+      const char* nm = kIngredients[g_universe][s];
+      int w = oled.getStrWidth(nm);
+      int x = (128 - w) / 2;
+      int ny = y + nameDy;
+      if (count == 2) { drawDiamond(x - 7, ny - 3); drawDiamond(x + w + 5, ny - 3); }
+      oled.drawStr(x, ny, nm);
+      y += blockH;
+      ord++;
     }
   }
 

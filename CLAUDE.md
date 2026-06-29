@@ -83,8 +83,10 @@ States: **IDLE → IDENTIFY → STIRRING → REVEAL**
 - **IDLE** — empty base. "Place ingredients" + "Press for settings". No realm
   shown here; a press opens **Settings** (where the realm lives).
 - **IDENTIFY** — ≥1 bottle seated. **Features** the ingredient name(s) in an
-  elegant serif with sparkles (a single ingredient large, two/three as a flanked
-  list); no realm header. A subtle "turn to stir" cue.
+  elegant serif with sparkles (a single ingredient large, two/three stacked);
+  each name carries a small **ordinal caption** above it ("First/Second/Third
+  ingredient", by order seated) so it's clear ingredients **stack**, not replace.
+  No realm header. A subtle "turn to stir" cue.
 - **STIRRING** — encoder is turning. A **power bar** fills as you stir, with a
   swirling vortex + rising trill (~320→1100 Hz). The add rate is **capped**, so
   spinning faster can't rush it — each **Stir Level** (Easy/Medium/Hard) has a
