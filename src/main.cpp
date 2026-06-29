@@ -348,9 +348,9 @@ static const char* const kOnOff[] = { "Off", "On" };
 // harder the fuller (further right) the bar already is; higher levels start a
 // touch slower and slow down much more steeply toward the top.
 static const char* const  kStirLabels[] = { "Easy", "Medium", "Hard" };
-static const float        kStirGain[]   = { 0.060f, 0.050f, 0.026f }; // bar added per encoder count (when empty)
-static const float        kStirResist[] = { 0.35f,  0.60f,  0.52f };  // adding gets this much harder toward full
-static const float        kStirDecay[]  = { 0.15f,  0.26f,  0.72f };  // bar drained per second, ALWAYS
+static const float        kStirGain[]   = { 0.060f, 0.034f, 0.016f }; // bar added per encoder count (when empty)
+static const float        kStirResist[] = { 0.35f,  0.50f,  0.30f };  // adding gets this much harder toward full
+static const float        kStirDecay[]  = { 0.15f,  0.40f,  0.72f };  // bar drained per second, ALWAYS
 static constexpr int      kStirN        = 3;
 
 static void applyBrightness() {
@@ -518,6 +518,16 @@ static void updateStir(uint32_t now, uint32_t dt, int32_t d) {
   // full. The decay itself is the "grace": stop and it bleeds down, returning
   // to identify only once it hits zero.
   const int lvl = g_stirLevelIdx;
+
+  // TEMP: report stir rate (counts/sec) + progress to calibrate difficulty.
+  static uint32_t s_rateWin = 0; static int32_t s_rateCnt = 0;
+  s_rateCnt += (d < 0) ? -d : d;
+  if (now - s_rateWin >= 1000) {
+    Serial.printf("[stir] %ld counts/s  p=%d%%  lvl=%d\n",
+                  (long)s_rateCnt, (int)(s_stirProgress * 100), lvl);
+    s_rateCnt = 0; s_rateWin = now;
+  }
+
   s_stirProgress -= kStirDecay[lvl] * (float)dt / 1000.0f;
   if (d != 0) {
     int ad = (d < 0) ? -d : d;
@@ -764,47 +774,39 @@ static void drawPotionName(const char* name) {
   drawFitted(name, fonts, 3, 112, 39, 32, 47);
 }
 
-// --- Reveal animations: three styles, picked at random per brew ----------
-// `el` is time elapsed in the ANIM phase; each animation spans REVEAL_ANIM_MS.
+// --- Reveal animations: three bold, continuously-moving styles ------------
+// `el` is time elapsed in the ANIM phase (spans REVEAL_ANIM_MS). Each keeps
+// strong on-screen motion for the WHOLE phase so it can't read as frozen.
 //
-// Style 0: a dense sparkle starburst exploding outward (elliptical).
+// Style 0: radar sweep — a fan of lines spins around the centre.
 static void animStarburst(uint32_t el) {
+  float ang = (float)el * 0.011f;
+  for (int t = 0; t < 6; t++) {
+    float a = ang - (float)t * 0.20f;
+    oled.drawLine(64, 33,
+                  64 + (int)lroundf(58.0f * cosf(a)),
+                  33 + (int)lroundf(28.0f * sinf(a)));
+  }
+  oled.drawDisc(64, 33, 2);
+}
+
+// Style 1: brewing surge — liquid rises from the bottom with a rippling top.
+static void animBubbles(uint32_t el) {
   float p = (float)el / (float)REVEAL_ANIM_MS;
   if (p > 1.0f) p = 1.0f;
-  for (int i = 0; i < 18; i++) {
-    float a = i * 0.349f + p * 1.4f;
-    float rad = 4.0f + p * 60.0f;
-    int x = 64 + (int)lroundf(rad * cosf(a));
-    int y = 33 + (int)lroundf(rad * sinf(a) * 0.46f);
-    int r = 3 - (int)(p * 3.0f);           // start big, shrink as they fly out
-    if (x > 5 && x < 123 && y > 5 && y < 59) drawSparkle(x, y, r < 0 ? 0 : r);
+  int base = 60 - (int)lroundf(p * 54.0f);     // surface climbs y60 -> y6
+  for (int x = 5; x < 123; x++) {
+    int surf = base + (int)lroundf(2.5f * sinf((float)x * 0.22f + (float)el * 0.010f));
+    for (int y = surf; y < 61; y++)
+      if (((x + y) & 1) == 0) oled.drawPixel(x, y);   // dithered fill
   }
 }
 
-// Style 1: a brew surge — bubbles rise from the bottom and grow as they climb.
-static void animBubbles(uint32_t el) {
-  float gp = (float)el / (float)REVEAL_ANIM_MS;   // 0..1 across the phase
-  for (int i = 0; i < 12; i++) {
-    float f = gp * 1.3f - i * 0.06f;              // staggered rise
-    if (f < 0.0f || f > 1.0f) continue;
-    int x = 9 + i * 10 + (int)lroundf(3.0f * sinf(f * 12.0f));
-    int y = 57 - (int)lroundf(f * 52.0f);
-    int r = 1 + (int)lroundf(f * 3.0f);
-    if (y > 4 && x > 5 && x < 123) oled.drawCircle(x, y, r);
-  }
-}
-
-// Style 2: magic pulse — bold concentric rings expand outward from the centre.
+// Style 2: magic pulse — bold rings continuously emanate from the centre.
 static void animRings(uint32_t el) {
-  float k2r = 66.0f / (float)REVEAL_ANIM_MS;
   for (int k = 0; k < 4; k++) {
-    int t = (int)el - k * 180;
-    if (t < 0) continue;
-    int rad = (int)((float)t * k2r);
-    if (rad > 2 && rad < 64) {
-      oled.drawCircle(64, 33, rad);
-      if (rad < 63) oled.drawCircle(64, 33, rad + 1);   // doubled for visibility
-    }
+    int rad = (((int)el / 11) + k * 16) % 64;
+    if (rad > 3) { oled.drawCircle(64, 33, rad); oled.drawCircle(64, 33, rad - 1); }
   }
 }
 
