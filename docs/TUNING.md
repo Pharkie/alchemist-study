@@ -7,34 +7,32 @@ under `// ---- Tunables` near the top of `src/main.cpp`. Edit, then reflash:
 pio run -e c3-dev -t upload
 ```
 
-## Stir model (decay vs. add)
+## Stir model (capped add vs. decay)
 
-The power bar **always drains**; turning the knob **adds** against it, with
-diminishing returns toward the top:
+The power bar **always drains**; stirring **adds** against it — but the add rate
+is **capped**, so spinning faster than `cap/gain` counts/sec does nothing:
 
-    progress -= kStirDecay[level] * dt            // every tick
-    progress += kStirGain[level] * |counts| * (1 - kStirResist[level] * progress)   // on motion
+    rate = min(kStirGain[level] * counts_per_sec, kStirCap[level])
+    progress += rate * (1 - kStirResist[level]*progress) * dt   // capped add
+    progress -= kStirDecay[level] * dt                          // always drains
 
-So you *fight the decay*, and must stir ever faster near full (where the add
-shrinks). Stop and the bar bleeds down; when it reaches zero it returns to
-identify — the decay **is** the grace, so there's no separate idle timer. A full
-bar arms ("Press to create") and holds until a press or a real combo change. The
-**Stir Level** setting picks the numbers.
+This is the crux: because the add is **capped**, each level has a **guaranteed
+minimum fill time ≈ 1/(cap − decay)** that no spin speed can beat — so difficulty
+does **not** depend on measuring anyone's max stir rate. You must also sustain
+**> decay/gain c/s** or the decay wins and the bar stalls/drains. Stop and it
+bleeds to zero (grace, then back to identify). A full bar arms ("Press to create").
 
 | Constant | Easy / Med / Hard | Effect |
 |---|---|---|
-| `kStirGain[]` | `0.010 / 0.007 / 0.005` | Bar added per encoder count (when empty). Lower = harder. |
-| `kStirResist[]` | `0.30 / 0.40 / 0.35` | How much the add shrinks toward full. Higher = harder top (but `1/(1-R)` makes the very top unreachable if too high). |
-| `kStirDecay[]` | `0.20 / 0.38 / 0.45` | Bar drained per second, **always**. Higher = punishes hesitation. |
-
-Calibrated to a measured **~170 counts/s** peak stir (use the `c3-calib` build to
-re-measure). Break-even = decay/gain: Easy ~20, Medium ~54, Hard ~90 c/s; Hard's
-end-wall needs a near-peak ~140 c/s push, so it's a sustained ~8 s fight. Felt
-effort to advance at position `p` is `decay / (gain·(1−R·p))` — a hyperbola
-(gentle then steep near the top). To rescale: lower gain / raise decay to make a
-level harder; raising `resist` only steepens the *end* (and can make the very
-top unreachable).
+| `kStirGain[]` | `0.032 / 0.0167 / 0.012` | add/sec per (count/sec) until capped; sets the sustain threshold. |
+| `kStirCap[]` | `0.48 / 0.50 / 0.60` | **max** add/sec — the ceiling; can't be cheesed. |
+| `kStirResist[]` | `0.30 / 0.20 / 0.10` | mild end-loading (small so the capped top stays reachable). |
+| `kStirDecay[]` | `0.15 / 0.30 / 0.50` | bar drained per second, **always**. |
 | `STIR_ANGLE_STEP` | `0.18` | Swirl radians per encoder count (visual only). |
+
+Min fill ≈ `1/(cap − decay)`: Easy ~3 s, Medium ~5 s, **Hard ~10 s+**. To make a
+level harder, move `cap` toward `decay` (raises the floor) or raise `decay`. Keep
+`cap > decay` or it's unfillable.
 
 ## Audio (needs a passive buzzer)
 

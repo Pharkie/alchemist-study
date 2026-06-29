@@ -348,12 +348,15 @@ static const char* const kOnOff[] = { "Off", "On" };
 // harder the fuller (further right) the bar already is; higher levels start a
 // touch slower and slow down much more steeply toward the top.
 static const char* const  kStirLabels[] = { "Easy", "Medium", "Hard" };
-// Calibrated to a measured ~170 counts/s peak stir. Break-even (decay/gain):
-// Easy ~20 c/s, Medium ~54 c/s, Hard ~90 c/s — and Hard's end-wall needs a
-// near-peak (~140 c/s) push, so it's a sustained ~8s fight to the top.
-static const float        kStirGain[]   = { 0.010f, 0.007f, 0.005f }; // bar added per encoder count (when empty)
-static const float        kStirResist[] = { 0.30f,  0.40f,  0.35f };  // adding gets this much harder toward full
-static const float        kStirDecay[]  = { 0.20f,  0.38f,  0.45f };  // bar drained per second, ALWAYS
+// The add rate is CAPPED, so spinning faster than (cap/gain) counts/sec gives
+// NO benefit. Each level therefore has a guaranteed MINIMUM fill time of about
+// 1/(cap - decay) seconds, independent of how fast anyone can spin:
+//   Easy ~3s, Medium ~5s, Hard ~10s. You must also sustain >~(decay/gain) c/s
+//   or the constant decay wins and the bar stalls/drains.
+static const float        kStirGain[]   = { 0.0320f, 0.0167f, 0.0120f }; // add/sec per (count/sec), until capped
+static const float        kStirCap[]    = { 0.48f,   0.50f,   0.60f };   // max add/sec (the ceiling — can't cheese past it)
+static const float        kStirResist[] = { 0.30f,   0.20f,   0.10f };   // mild end-loading (small so the top stays reachable)
+static const float        kStirDecay[]  = { 0.15f,   0.30f,   0.50f };   // bar drained per second, ALWAYS
 static constexpr int      kStirN        = 3;
 
 static void applyBrightness() {
@@ -521,15 +524,27 @@ static void updateStir(uint32_t now, uint32_t dt, int32_t d) {
   // full. The decay itself is the "grace": stop and it bleeds down, returning
   // to identify only once it hits zero.
   const int lvl = g_stirLevelIdx;
-  s_stirProgress -= kStirDecay[lvl] * (float)dt / 1000.0f;
-  if (d != 0) {
-    int ad = (d < 0) ? -d : d;
-    s_stirProgress += kStirGain[lvl] * (float)ad * (1.0f - kStirResist[lvl] * s_stirProgress);
+
+  // Estimate current stir rate (counts/sec) over a short window, so the cap
+  // applies smoothly.
+  static uint32_t s_rateWin = 0; static int32_t s_rateAcc = 0; static int s_curCps = 0;
+  s_rateAcc += (d < 0) ? -d : d;
+  if (now - s_rateWin >= 120) {
+    s_curCps = (int)(s_rateAcc * 1000 / (now - s_rateWin));
+    s_rateAcc = 0; s_rateWin = now;
   }
+
+  // Capped add vs. constant decay. Past cap/gain c/s, faster spinning adds
+  // nothing, so the minimum fill time is fixed regardless of spin speed.
+  float addRate = kStirGain[lvl] * (float)s_curCps;
+  if (addRate > kStirCap[lvl]) addRate = kStirCap[lvl];
+  s_stirProgress += addRate * (1.0f - kStirResist[lvl] * s_stirProgress) * (float)dt / 1000.0f;
+  s_stirProgress -= kStirDecay[lvl] * (float)dt / 1000.0f;
 
   if (s_stirProgress >= 1.0f) {
     s_stirProgress = 1.0f;
     s_stirReady = true;
+    Serial.printf("[stir] FILLED lvl=%d in %lums\n", lvl, (unsigned long)(now - g_stateMs));
   } else if (s_stirProgress > 0.0f) {
     s_stirZeroMs = now;                  // still brewing — keep the grace clock fresh
   } else {
