@@ -953,6 +953,11 @@ static void render() {
 // ---- Arduino entry points ----------------------------------------------
 void setup() {
   Serial.begin(115200);
+  // CRITICAL: USB-CDC Serial.write() blocks until a host drains the port. With
+  // no monitor attached that stall (up to seconds) freezes the whole loop — it
+  // was what made the reveal animation appear frozen and lagged input. A 0ms TX
+  // timeout makes logging non-blocking (drops bytes if nobody's listening).
+  Serial.setTxTimeoutMs(0);
   delay(200);
   Serial.println("\n=== Alchemist Study (ESP32-C3) booting ===");
 
@@ -993,9 +998,8 @@ void setup() {
   // the core-3.x i2c-ng driver in ESP_ERR_INVALID_STATE). 400 kHz keeps a
   // full-buffer send to ~2-3 ms for a smooth swirl.
   Wire.setPins(PIN_OLED_SDA, PIN_OLED_SCL);
-  oled.setBusClock(400000);
-  oled.begin();
-  Wire.setClock(400000);   // force 400kHz — setBusClock alone leaves it at 100kHz
+  oled.begin();            // U8g2 owns the single Wire.begin(); bus stays at 100kHz
+  Wire.setClock(100000);   // 100kHz — reliable on breadboard; speed was never the issue
 
   // Probe for the panel; if absent/miswired, run headless (skip drawing so we
   // don't flood the log with ESP_ERR_INVALID_STATE every frame).

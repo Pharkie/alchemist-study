@@ -39,7 +39,7 @@ potions. Full tables in [CLAUDE.md](CLAUDE.md).
 | Function | GPIO | Notes |
 |---|---|---|
 | Reed slot 1 / 2 / 3 | 3 / 4 / 10 | `INPUT_PULLUP`; magnet pulls LOW |
-| OLED SDA / SCL | 5 / 6 | I²C @ 400 kHz |
+| OLED SDA / SCL | 5 / 6 | I²C @ 100 kHz |
 | Buzzer | 1 | `tone()` (needs core 3.x) |
 | Encoder A / B / SW | 0 / 7 / 20 | SW `INPUT_PULLUP` |
 
