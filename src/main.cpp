@@ -348,9 +348,11 @@ static const char* const kOnOff[] = { "Off", "On" };
 // harder the fuller (further right) the bar already is; higher levels start a
 // touch slower and slow down much more steeply toward the top.
 static const char* const  kStirLabels[] = { "Easy", "Medium", "Hard" };
-static const float        kStirGain[]   = { 0.060f, 0.034f, 0.016f }; // bar added per encoder count (when empty)
-static const float        kStirResist[] = { 0.35f,  0.50f,  0.30f };  // adding gets this much harder toward full
-static const float        kStirDecay[]  = { 0.15f,  0.40f,  0.72f };  // bar drained per second, ALWAYS
+// Calibrated to a ~75 counts/s hard stir: Easy fills easily, Medium needs a
+// decent pace, Hard needs near-max effort (break-even ~54 c/s) for ~8s.
+static const float        kStirGain[]   = { 0.035f, 0.018f, 0.012f }; // bar added per encoder count (when empty)
+static const float        kStirResist[] = { 0.30f,  0.45f,  0.20f };  // adding gets this much harder toward full
+static const float        kStirDecay[]  = { 0.18f,  0.45f,  0.65f };  // bar drained per second, ALWAYS
 static constexpr int      kStirN        = 3;
 
 static void applyBrightness() {
@@ -518,16 +520,6 @@ static void updateStir(uint32_t now, uint32_t dt, int32_t d) {
   // full. The decay itself is the "grace": stop and it bleeds down, returning
   // to identify only once it hits zero.
   const int lvl = g_stirLevelIdx;
-
-  // TEMP: report stir rate (counts/sec) + progress to calibrate difficulty.
-  static uint32_t s_rateWin = 0; static int32_t s_rateCnt = 0;
-  s_rateCnt += (d < 0) ? -d : d;
-  if (now - s_rateWin >= 1000) {
-    Serial.printf("[stir] %ld counts/s  p=%d%%  lvl=%d\n",
-                  (long)s_rateCnt, (int)(s_stirProgress * 100), lvl);
-    s_rateCnt = 0; s_rateWin = now;
-  }
-
   s_stirProgress -= kStirDecay[lvl] * (float)dt / 1000.0f;
   if (d != 0) {
     int ad = (d < 0) ? -d : d;

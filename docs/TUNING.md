@@ -23,13 +23,16 @@ bar arms ("Press to create") and holds until a press or a real combo change. The
 
 | Constant | Easy / Med / Hard | Effect |
 |---|---|---|
-| `kStirGain[]` | `0.060 / 0.050 / 0.026` | Bar added per encoder count (when empty). Lower = harder. |
-| `kStirResist[]` | `0.35 / 0.60 / 0.52` | How much the add shrinks toward full. Higher = harder top (but `1/(1-R)` makes the very top unreachable if too high). |
-| `kStirDecay[]` | `0.15 / 0.26 / 0.72` | Bar drained per second, **always**. Higher = punishes hesitation. |
+| `kStirGain[]` | `0.035 / 0.018 / 0.012` | Bar added per encoder count (when empty). Lower = harder. |
+| `kStirResist[]` | `0.30 / 0.45 / 0.20` | How much the add shrinks toward full. Higher = harder top (but `1/(1-R)` makes the very top unreachable if too high). |
+| `kStirDecay[]` | `0.18 / 0.45 / 0.65` | Bar drained per second, **always**. Higher = punishes hesitation. |
 
-Felt effort to advance at position `p` is `decay / (gain·(1−R·p))` — a hyperbola
-(gentle then steep near the top). To make a level uniformly N× harder, scale
-gain down and/or decay up by ~N; raising `resist` only steepens the *end*.
+Calibrated to a measured **~75 counts/s** hard stir: Hard's start break-even is
+~54 c/s (decay/gain), so you must stir near-max for ~8 s and it stalls below
+that; Medium needs a decent pace; Easy fills easily. Felt effort to advance at
+position `p` is `decay / (gain·(1−R·p))` — a hyperbola (gentle then steep near
+the top). To rescale: lower gain / raise decay to make a level harder; raising
+`resist` only steepens the *end* (and can make the very top unreachable).
 | `STIR_ANGLE_STEP` | `0.18` | Swirl radians per encoder count (visual only). |
 
 ## Audio (needs a passive buzzer)
