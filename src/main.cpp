@@ -348,11 +348,12 @@ static const char* const kOnOff[] = { "Off", "On" };
 // harder the fuller (further right) the bar already is; higher levels start a
 // touch slower and slow down much more steeply toward the top.
 static const char* const  kStirLabels[] = { "Easy", "Medium", "Hard" };
-// Calibrated to a ~75 counts/s hard stir: Easy fills easily, Medium needs a
-// decent pace, Hard needs near-max effort (break-even ~54 c/s) for ~8s.
-static const float        kStirGain[]   = { 0.035f, 0.018f, 0.012f }; // bar added per encoder count (when empty)
-static const float        kStirResist[] = { 0.30f,  0.45f,  0.20f };  // adding gets this much harder toward full
-static const float        kStirDecay[]  = { 0.18f,  0.45f,  0.65f };  // bar drained per second, ALWAYS
+// Calibrated to a measured ~170 counts/s peak stir. Break-even (decay/gain):
+// Easy ~20 c/s, Medium ~54 c/s, Hard ~90 c/s — and Hard's end-wall needs a
+// near-peak (~140 c/s) push, so it's a sustained ~8s fight to the top.
+static const float        kStirGain[]   = { 0.010f, 0.007f, 0.005f }; // bar added per encoder count (when empty)
+static const float        kStirResist[] = { 0.30f,  0.40f,  0.35f };  // adding gets this much harder toward full
+static const float        kStirDecay[]  = { 0.20f,  0.38f,  0.45f };  // bar drained per second, ALWAYS
 static constexpr int      kStirN        = 3;
 
 static void applyBrightness() {
