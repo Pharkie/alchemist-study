@@ -89,6 +89,7 @@ The same diagnostic is also reachable in-firmware via **Settings → Hardware Te
 | `src/hwcheck.cpp` | Standalone hardware diagnostic (`c3-hwcheck`) |
 | `platformio.ini` | Build environments |
 | `CLAUDE.md` | Full spec: pin map, platform rationale, all realm tables |
+| `docs/CIRCUIT.md` | Power, grounding & wiring diagram (incl. the LED-coil domain) |
 | `docs/ARCHITECTURE.md` | State-machine conventions (transitions, timing, inputs) |
 | `docs/HARDWARE_TEST.md` | Running the hardware checker + troubleshooting |
 | `docs/TUNING.md` | Tunable feel constants (stir curve, audio, timing) |
