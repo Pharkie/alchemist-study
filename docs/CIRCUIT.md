@@ -88,16 +88,28 @@ flowchart TB
   *If* you ever add a C3→coil control or sense line, bond the two grounds at
   exactly one point (a star) at that time.
 
-## LED coil vs. reed switches
+## ⚠️ LED coil — keep it AWAY from the electronics
 
-- Reed switches are **magnetic** sensors, so an energized coil is the one real
-  risk to the core sensing. Mitigated here by geometry: coil is **vertical at the
-  rear**, reeds are **horizontal at the front** — separated, with the field axis
-  roughly perpendicular to the reed axes.
-- **Bench-check:** energize the coil and bring it toward the reeds while watching
-  **Settings → Hardware Test** — confirm no false trips.
-- Confirm the coil board has a **flyback diode / snubber** across the coil. Run
-  the coil leads as a **twisted pair**, routed away from the I²C and reed wiring.
+> **A close-range encounter with the energized coil destroyed a C3.** During
+> bring-up the coil was brought near the board and **killed the microcontroller
+> outright** (the OLED, reeds, encoder and buzzer survived; the C3 had to be
+> replaced). Treat the coil as a hazard to every nearby chip — induced
+> voltage/EMI from a coil can latch-up or fry an unprotected MCU.
+
+- **Never bring the energized coil toward the C3, OLED, or any wiring.** Mount it
+  once at its final position and power it up *there* — do not move it around near
+  the electronics, ever.
+- Reed switches are **magnetic** sensors, so the coil is also a risk to the core
+  sensing. Geometry mitigates it here: coil **vertical at the rear**, reeds
+  **horizontal at the front**, field axis roughly perpendicular to the reed axes.
+- **Checking reed susceptibility safely:** with the coil **fixed at its mounted
+  position (never closer)**, energize it and watch **Settings → Hardware Test**
+  for false trips. To change the geometry, power the coil **down first**, move it,
+  then power up — keep the C3 well clear throughout.
+- Before energizing it anywhere near the build: a **flyback diode / snubber**
+  across the coil, coil leads as a **twisted pair** routed away from the I²C and
+  reed wiring, and as much physical **distance / shielding** as possible between
+  the coil and the C3.
 
 ## Decoupling
 
