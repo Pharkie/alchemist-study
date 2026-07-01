@@ -661,10 +661,15 @@ static void drawTwinkles(uint32_t now) {
   }
 }
 
+// The recurring four-corner sparkle motif: one sparkle at each corner of the
+// (x1,y1)-(x2,y2) rectangle. Callers pick their own blink period and radii.
+static void drawCornerSparkles4(int x1, int y1, int x2, int y2, int r) {
+  drawSparkle(x1, y1, r);  drawSparkle(x2, y1, r);
+  drawSparkle(x1, y2, r);  drawSparkle(x2, y2, r);
+}
+
 static void drawCornerSparkles(uint32_t now) {
-  int r = ((now / 300) & 1) ? 1 : 0;
-  drawSparkle(9, 10, r);  drawSparkle(118, 10, r);
-  drawSparkle(9, 53, r);  drawSparkle(118, 53, r);
+  drawCornerSparkles4(9, 10, 118, 53, ((now / 300) & 1) ? 1 : 0);
 }
 
 // Draw `s` centered, in the largest of `fonts` that fits `budget`, on one line
@@ -681,6 +686,8 @@ static void drawFitted(const char* s, const uint8_t* const fonts[], int nf,
     char l1[48] = "", l2[48] = "";
     for (char* tok = strtok(buf, " "); tok; tok = strtok(nullptr, " ")) {
       if (l2[0] == '\0') {
+        // Safety invariant: l1 and tok are disjoint substrings of buf (<=47
+        // chars, separated by at least one space), so l1 + ' ' + tok fits 48.
         char trial[48];
         strcpy(trial, l1);
         if (l1[0]) strcat(trial, " ");
@@ -783,8 +790,7 @@ static void renderStirring(uint32_t now) {
   if (s_stirReady) {
     drawFancyFrame();
     int sr = ((now / 200) & 1) ? 2 : 1;
-    drawSparkle(15, 14, sr);  drawSparkle(113, 14, sr);
-    drawSparkle(15, 50, sr);  drawSparkle(113, 50, sr);
+    drawCornerSparkles4(15, 14, 113, 50, sr);
     oled.setFont(u8g2_font_helvR08_tr);
     drawCenteredF("potion ready", 14);
     oled.setFont(u8g2_font_ncenB12_tr);
@@ -911,9 +917,7 @@ static void renderReveal(uint32_t now) {
     }
   } else {
     // Phase 2: the named potion, with gentle corner twinkles.
-    int r = ((now / 250) & 1) ? 1 : 0;
-    drawSparkle(11, 11, r); drawSparkle(117, 11, r);
-    drawSparkle(11, 53, r); drawSparkle(117, 53, r);
+    drawCornerSparkles4(11, 11, 117, 53, ((now / 250) & 1) ? 1 : 0);
     oled.drawHLine(44, 15, 40);
     drawDiamond(40, 15);
     drawDiamond(88, 15);
@@ -945,7 +949,8 @@ static void renderSettings() {
   oled.clearBuffer();
   drawTitleBar("Settings");
 
-  const int VIS = 5;
+  // Rows keep clear of the rightmost 4px, which belong to the scrollbar.
+  const int VIS = 5, ROW_W = 124;
   int first = 0;
   if (kMenuN > VIS) {
     first = s_menuIdx - VIS / 2;
@@ -958,13 +963,13 @@ static void renderSettings() {
     int y = 22 + row * 10;
     bool sel = (i == s_menuIdx);
     bool editing = sel && s_menuEditing;
-    if (sel && !editing) { oled.drawBox(0, y - 8, 128, 10); oled.setDrawColor(0); }
+    if (sel && !editing) { oled.drawBox(0, y - 8, ROW_W, 10); oled.setDrawColor(0); }
     oled.drawStr(4, y, kMenu[i].label);
     char tmp[16];
     const char* v = menuValueStr(kMenu[i], tmp, sizeof(tmp));
     if (v && v[0]) {
       int vw = oled.getStrWidth(v);
-      int vx = 128 - vw - 4;
+      int vx = ROW_W - vw - 4;
       if (editing) {                      // editing: invert just the value cell
         oled.drawBox(vx - 3, y - 8, vw + 6, 10);
         oled.setDrawColor(0);
@@ -975,6 +980,16 @@ static void renderSettings() {
       }
     }
     if (sel && !editing) oled.setDrawColor(1);
+  }
+
+  // Scrollbar: a hairline track with a thumb whose position tracks `first`,
+  // so it's obvious there are more items than the five on screen.
+  if (kMenuN > VIS) {
+    const int ty = 15, th = 48;                             // track extent
+    int thumbH = th * VIS / kMenuN;
+    int thumbY = ty + (th - thumbH) * first / (kMenuN - VIS);
+    oled.drawVLine(127, ty, th);
+    oled.drawBox(125, thumbY, 3, thumbH);
   }
   oled.sendBuffer();
 }
