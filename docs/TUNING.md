@@ -60,10 +60,13 @@ Melodies (success jingle, realm-toggle beep, "not ready" buzz) are the
 
 Runtime settings live in the on-device **Settings** menu (press the knob on the
 idle screen; turn to move, press to edit a value, turn to change, press to
-confirm): **Realm**, **Mute**, **Brightness** (1–5), **Stir Level**
-(Easy/Medium/Hard), **Hardware Test**, **Firmware**, **Exit**. Mute, brightness, and realm persist to NVS. The menu is a
-data table (`kMenu` in `main.cpp`) — add an item by appending one row
-(`{label, kind, get, set, …}`); kinds are choice / range / info / action.
+confirm — a long-press cancels the edit and reverts the value): **Realm**,
+**Mute**, **Brightness** (1–5), **Stir Level** (Easy/Medium/Hard), **Sleep**
+(screen-blank timeout), **Hardware Test**, **Firmware**, **Exit**. Realm, Mute,
+Brightness, Stir Level and Sleep persist to NVS (written on confirm, not per
+step). The menu is a data table (`kMenu` in `main.cpp`) — add an item by
+appending one row (`{label, kind, get, set, persist, …}`); kinds are choice /
+range / info / action.
 
 ## Encoder direction
 

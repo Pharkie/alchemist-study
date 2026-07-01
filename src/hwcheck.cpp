@@ -12,35 +12,18 @@
 //   Reed 1 (GPIO3) ON
 //   Reed 1 (GPIO3) off
 //
-// Pin map below MUST mirror main.cpp.
+// Pin map + encoder decode come from src/pins.h / src/quadrature.h —
+// shared with the real firmware, so they can never drift apart.
 // ============================================================
 
 #include <Arduino.h>
 #include <U8g2lib.h>
 #include <Wire.h>
-
-static constexpr int PIN_REED_SLOT1 = 3;
-static constexpr int PIN_REED_SLOT2 = 4;
-static constexpr int PIN_REED_SLOT3 = 10;
-static constexpr int PIN_OLED_SDA   = 5;
-static constexpr int PIN_OLED_SCL   = 6;
-static constexpr int PIN_BUZZER     = 1;
-static constexpr int PIN_ENC_A      = 0;
-static constexpr int PIN_ENC_B      = 7;
-static constexpr int PIN_ENC_SW     = 20;
+#include "pins.h"
+#include "quadrature.h"
 
 U8G2_SSD1306_128X64_NONAME_F_HW_I2C oled(U8G2_R0, /*reset=*/U8X8_PIN_NONE);
 static bool s_oledOK = false;
-
-// ---- encoder decode (same scheme as the firmware) ----------------------
-volatile int32_t g_encCount = 0;
-static volatile uint8_t s_encPrev = 0;
-static const int8_t kQuad[16] = { 0,-1,1,0, 1,0,0,-1, -1,0,0,1, 0,1,-1,0 };
-static void IRAM_ATTR encISR() {
-  uint8_t c = (uint8_t)((digitalRead(PIN_ENC_A) << 1) | digitalRead(PIN_ENC_B));
-  g_encCount += kQuad[(s_encPrev << 2) | c];
-  s_encPrev = c;
-}
 
 // ---- monitored inputs (ON == pin pulled LOW) ---------------------------
 struct In { int pin; const char* name; const char* shortName; int last; };
@@ -67,8 +50,13 @@ static void checkBuzzer() {
 
 static void checkOLED() {
   Serial.println("\n[2/3] OLED (I2C, SDA=GPIO5 SCL=GPIO6):");
+  // Same init sequence as the real firmware: preset the pins, let U8g2 own
+  // the single Wire.begin() (a second Wire.begin() can wedge the core-3.x
+  // i2c-ng driver), and set the clock AFTER begin() — U8g2's setBusClock()
+  // before begin() does not stick.
   Wire.setPins(PIN_OLED_SDA, PIN_OLED_SCL);
-  Wire.begin();
+  oled.begin();            // inits the panel at U8g2's default address 0x3C
+  Wire.setClock(100000);
   uint8_t addr = 0;
   for (uint8_t a : {0x3C, 0x3D}) {
     Wire.beginTransmission(a);
@@ -80,9 +68,12 @@ static void checkOLED() {
     return;
   }
   Serial.printf("      OK: found 0x%02X.\n", addr);
-  oled.setI2CAddress(addr << 1);
-  oled.setBusClock(400000);
-  oled.begin();
+  if (addr == 0x3D) {      // re-send the init sequence at the alternate address
+    oled.setI2CAddress(addr << 1);
+    oled.initDisplay();
+    oled.clearDisplay();
+    oled.setPowerSave(0);
+  }
   s_oledOK = true;
 }
 
@@ -95,7 +86,7 @@ static void renderStatus(uint32_t now) {
 
   oled.drawStr(2, 9, "HW CHECK");
   char e[16];
-  snprintf(e, sizeof(e), "enc:%ld", (long)g_encCount);
+  snprintf(e, sizeof(e), "enc:%ld", (long)g_encoderCount);
   oled.drawStr(128 - oled.getStrWidth(e) - 2, 9, e);
   oled.drawHLine(0, 12, 128);
 
@@ -148,11 +139,7 @@ void setup() {
     pinMode(inputs[i].pin, INPUT_PULLUP);
     inputs[i].last = digitalRead(inputs[i].pin);
   }
-  pinMode(PIN_ENC_A, INPUT_PULLUP);
-  pinMode(PIN_ENC_B, INPUT_PULLUP);
-  s_encPrev = (uint8_t)((digitalRead(PIN_ENC_A) << 1) | digitalRead(PIN_ENC_B));
-  attachInterrupt(digitalPinToInterrupt(PIN_ENC_A), encISR, CHANGE);
-  attachInterrupt(digitalPinToInterrupt(PIN_ENC_B), encISR, CHANGE);
+  encoderBegin();   // shared decoder (quadrature.h)
 
   Serial.println("\n[3/3] LIVE — move a magnet to each reed, press/turn the knob.");
   Serial.println("      ON = magnet present (reed closed). Watch the OLED too.\n");
@@ -178,7 +165,7 @@ void loop() {
   // Encoder activity + direction (serial, throttled).
   static int32_t lastEnc = 0;
   static uint32_t lastRep = 0;
-  int32_t c = g_encCount;
+  int32_t c = g_encoderCount;
   if (c != lastEnc && now - lastRep > 120) {
     Serial.printf("Encoder (GPIO0/7) count=%ld  (%s)\n", (long)c, (c > lastEnc) ? "CW +" : "CCW -");
     lastEnc = c;
@@ -189,10 +176,10 @@ void loop() {
   // live), otherwise a slower idle tick that still expires the press banner.
   static uint32_t lastDraw = 0;
   static int32_t lastDrawnEnc = 0;
-  bool active = dirty || (g_encCount != lastDrawnEnc);
+  bool active = dirty || (g_encoderCount != lastDrawnEnc);
   if (now - lastDraw >= (uint32_t)(active ? 20 : 150)) {
     lastDraw = now;
-    lastDrawnEnc = g_encCount;
+    lastDrawnEnc = g_encoderCount;
     renderStatus(now);
   }
 

@@ -27,47 +27,10 @@
 #include <math.h>
 #include <string.h>
 #include "esp_random.h"
+#include "pins.h"        // shared pin map (also used by hwcheck)
+#include "quadrature.h"  // shared encoder decode: g_encoderCount + encoderBegin()
 
-// ---- Pin map (ESP32-C3 Super Mini, native USB) -------------------------
-// Reed switches: INPUT_PULLUP; a magnet in the bottle base pulls the line
-// LOW when seated. Combo bits: bit0=slot1, bit1=slot2, bit2=slot3.
-static constexpr int PIN_REED_SLOT1 = 3;   // bit0
-static constexpr int PIN_REED_SLOT2 = 4;   // bit1
-static constexpr int PIN_REED_SLOT3 = 10;  // bit2
-
-// OLED (SSD1306 128x64, I2C, white): SDA=5, SCL=6.
-static constexpr int PIN_OLED_SDA = 5;
-static constexpr int PIN_OLED_SCL = 6;
-
-// Passive buzzer, driven with tone()/noTone() (needs core 3.x).
-static constexpr int PIN_BUZZER = 1;
-
-// Rotary encoder with push. GPIO0 is safe here: on the C3 it is NOT a
-// strapping pin (unlike the classic ESP32), so a detent resting in
-// either state at boot is harmless.
-static constexpr int PIN_ENC_A  = 0;
-static constexpr int PIN_ENC_B  = 7;
-static constexpr int PIN_ENC_SW = 20;  // INPUT_PULLUP
-
-// ---- Encoder decode (GPIO interrupts, no PCNT) -------------------------
-// The ESP32-C3 lacks the PCNT pulse-counter peripheral that ESP32Encoder
-// needs, so we decode quadrature in software. Both channels fire on CHANGE;
-// a transition lookup table turns each (prev,curr) 2-bit state into -1/0/+1.
-// This is the equivalent of attachHalfQuad with internal pullups.
-volatile int32_t g_encoderCount = 0;
-static volatile uint8_t s_encPrev = 0;
-
-// Index = (prev<<2)|curr. Valid single-step transitions map to +/-1;
-// invalid / no-change entries are 0 (debounces contact bounce for free).
-static const int8_t kQuadTable[16] = {
-  0, -1, +1, 0, +1, 0, 0, -1, -1, 0, 0, +1, 0, +1, -1, 0
-};
-
-static void IRAM_ATTR encoderISR() {
-  uint8_t curr = (uint8_t)((digitalRead(PIN_ENC_A) << 1) | digitalRead(PIN_ENC_B));
-  g_encoderCount += kQuadTable[(s_encPrev << 2) | curr];
-  s_encPrev = curr;
-}
+#define ARRAY_COUNT(a) (uint8_t)(sizeof(a) / sizeof((a)[0]))
 
 // ---- Potion data -------------------------------------------------------
 // Two universes. Ingredient slots map to combo bits: slot1=bit0, slot2=bit1,
@@ -183,6 +146,7 @@ static uint32_t g_lastActivityMs = 0;      // last input (encoder/reed/button), 
 static bool     g_screenOff    = false;    // true while the panel is blanked (asleep)
 static int      s_menuIdx     = 0;         // highlighted settings item
 static bool     s_menuEditing = false;     // true while adjusting the highlighted item
+static int      s_editVal0    = 0;         // value when the edit began (long-press cancel reverts)
 static int32_t  s_navAccum    = 0;         // encoder accumulator for discrete steps
 static int      s_revealStyle = 0;         // which reveal animation is playing (0..2)
 
@@ -199,6 +163,12 @@ static float   s_stirProgress = 0.0f;      // 0..1 power bar (time-based fill)
 static float   s_swirlAngle   = 0.0f;      // radians, follows the encoder
 static bool    s_stirReady    = false;     // latched once the bar fills
 static uint32_t s_stirZeroMs  = 0;         // last time the bar was non-empty (zero-grace timer)
+// Stir-rate estimate (counts/sec over a short window). File-scope, not
+// function statics, so it can be reset whenever a stir/brew starts — a stale
+// rate would otherwise bleed a phantom head start into the next brew.
+static uint32_t s_rateWinMs   = 0;         // window start
+static int32_t  s_rateAcc     = 0;         // |encoder counts| accumulated this window
+static int      s_stirCps     = 0;         // current estimate (counts/sec)
 
 // Flavour text shown while stirring, escalating as the bar fills. The band is
 // chosen by progress (<50 / <75 / <90 / >=90 %); a random line from that band
@@ -220,7 +190,10 @@ static const char* const kStirFinal[] = {
   "to the brim!", "nearly potion!", "give it everything", "don't quit now!",
 };
 static const char* const* const kStirPools[4] = { kStirEarly, kStirMid, kStirLate, kStirFinal };
-static const uint8_t kStirPoolN[4] = { 8, 8, 8, 8 };
+static const uint8_t kStirPoolN[4] = {
+  ARRAY_COUNT(kStirEarly), ARRAY_COUNT(kStirMid),
+  ARRAY_COUNT(kStirLate),  ARRAY_COUNT(kStirFinal)
+};
 static int         s_stirMsgBand = -1;                 // current band (-1 = unset)
 static const char* s_stirMsg     = kStirEarly[0];      // line currently shown
 
@@ -240,7 +213,6 @@ static uint32_t s_lastRenderMs = 0;
 
 // ---- Audio: non-blocking melody player + stir trill --------------------
 struct Note { uint16_t freq; uint16_t durMs; };  // freq 0 = rest
-#define NUM_NOTES(a) (uint8_t)(sizeof(a) / sizeof((a)[0]))
 
 static const Note MEL_SUCCESS[]  = { {523, 90}, {659, 90}, {784, 90}, {1047, 150} };
 static const Note MEL_TOGGLE[]   = { {700, 110}, {1100, 150} };   // distinct two-note
@@ -252,6 +224,7 @@ static uint8_t      s_melodyIdx = 0;
 static uint32_t     s_noteStartMs = 0;
 static bool         s_melodyActive = false;
 static bool         s_buzzerOn = false;
+static uint16_t     s_trillHz  = 0;   // last trill pitch sent to tone() (0 = none)
 
 static void playCurrentNote() {
   uint16_t f = s_melody[s_melodyIdx].freq;
@@ -267,12 +240,14 @@ static void startMelody(const Note* m, uint8_t n, uint32_t now) {
   s_melodyActive = true;
   s_noteStartMs = now;
   s_buzzerOn = false;
+  s_trillHz = 0;         // melody owns the buzzer; force a re-arm when the trill resumes
   playCurrentNote();
 }
 
 static void updateAudio(uint32_t now) {
   if (g_mute) {
     if (s_buzzerOn || s_melodyActive) { noTone(PIN_BUZZER); s_buzzerOn = false; s_melodyActive = false; }
+    s_trillHz = 0;
     return;
   }
   if (s_melodyActive) {
@@ -296,17 +271,16 @@ static void updateAudio(uint32_t now) {
     int f = PITCH_MIN_HZ + (int)(s_stirProgress * (PITCH_MAX_HZ - PITCH_MIN_HZ));
     f += ((now / 35) & 1) ? 14 : -14;
     if (f < 50) f = 50;
-    tone(PIN_BUZZER, (uint16_t)f);
+    if ((uint16_t)f != s_trillHz) {   // re-arm LEDC only when the pitch changes
+      s_trillHz = (uint16_t)f;
+      tone(PIN_BUZZER, s_trillHz);
+    }
     s_buzzerOn = true;
   } else if (s_buzzerOn) {
     noTone(PIN_BUZZER);
     s_buzzerOn = false;
+    s_trillHz = 0;
   }
-}
-
-// ---- Persistence -------------------------------------------------------
-static void saveUniverse() {
-  prefs.putUChar("universe", (uint8_t)g_universe);
 }
 
 // ---- Input helpers -----------------------------------------------------
@@ -331,6 +305,7 @@ static void enterCombo(uint8_t c) {
   s_stirProgress = 0.0f;
   s_stirReady = false;
   s_baseEmptied = false;
+  s_stirCps = 0; s_rateAcc = 0; s_rateWinMs = g_now;   // no stale rate carry-over
   enterState(c == 0 ? ST_IDLE : ST_IDENTIFY);
   // Print MSB-first (slot3 slot2 slot1) to match the spec's "100 Nightshade".
   Serial.printf("[combo] %u%u%u (val %u) -> %s\n",
@@ -349,9 +324,11 @@ static void enterCombo(uint8_t c) {
 static void onSensedComboChange() {
   uint8_t raw = s_sensedCombo;
 
-  // Menus and the reveal own the screen — they ignore the base entirely. REVEAL
-  // is a self-contained sequence, so a flaky reed can't disrupt it.
-  if (g_state == ST_SETTINGS || g_state == ST_DIAG || g_state == ST_REVEAL) return;
+  // Menus own the screen and ignore the base entirely; whatever is seated is
+  // resynced on exit (settingsExit and the reveal end call enterCombo with
+  // the sensed combo). REVEAL falls through to the latch logic below, so a
+  // flaky reed still can't disrupt it but a genuinely added bottle restarts.
+  if (g_state == ST_SETTINGS || g_state == ST_DIAG) return;
 
   if (raw == 0) {                    // base emptied: latch it; never bail instantly
     s_baseEmptied = true;
@@ -391,17 +368,23 @@ static void applyBrightness() {
   if (g_haveDisplay) oled.setContrast((uint8_t)map(g_brightness, 1, 5, 16, 255));
 }
 
+// Each editable item has a get/set pair (set APPLIES the value live while
+// scrolling) and a persist function (writes NVS). Persist runs only when the
+// edit is CONFIRMED — so scrolling through choices doesn't hammer flash, and
+// a long-press cancel can revert without having saved anything.
 static int  getRealm()       { return (int)g_universe; }
-static void setRealm(int v)  { g_universe = (Universe)v; saveUniverse();
-                               startMelody(MEL_TOGGLE, NUM_NOTES(MEL_TOGGLE), millis()); }
+static void setRealm(int v)  { g_universe = (Universe)v;
+                               startMelody(MEL_TOGGLE, ARRAY_COUNT(MEL_TOGGLE), g_now); }
+static void persistRealm()   { prefs.putUChar("universe", (uint8_t)g_universe); }
 static int  getMute()        { return g_mute ? 1 : 0; }
-static void setMute(int v)   { g_mute = (v != 0); prefs.putUChar("mute", g_mute ? 1 : 0);
-                               if (g_mute) noTone(PIN_BUZZER); }
+static void setMute(int v)   { g_mute = (v != 0); if (g_mute) noTone(PIN_BUZZER); }
+static void persistMute()    { prefs.putUChar("mute", g_mute ? 1 : 0); }
 static int  getBright()      { return g_brightness; }
-static void setBright(int v) { g_brightness = (uint8_t)v; prefs.putUChar("bright", g_brightness);
-                               applyBrightness(); }
+static void setBright(int v) { g_brightness = (uint8_t)v; applyBrightness(); }
+static void persistBright()  { prefs.putUChar("bright", g_brightness); }
 static int  getStirLevel()    { return g_stirLevelIdx; }
-static void setStirLevel(int v){ g_stirLevelIdx = (uint8_t)v; prefs.putUChar("stirlvl", g_stirLevelIdx); }
+static void setStirLevel(int v){ g_stirLevelIdx = (uint8_t)v; }
+static void persistStirLevel(){ prefs.putUChar("stirlvl", g_stirLevelIdx); }
 
 // Screen-blank (screensaver) timeout. Index 0 = Never; the panel powers down
 // after this much input idle and wakes on any encoder/reed/button activity.
@@ -409,10 +392,13 @@ static const char* const kBlankLabels[] = { "Never", "10s", "1m", "5m", "30m" };
 static const uint32_t    kBlankMs[]     = { 0, 10000UL, 60000UL, 300000UL, 1800000UL };
 static constexpr int     kBlankN        = 5;
 static int  getBlank()       { return g_blankIdx; }
-static void setBlank(int v)  { g_blankIdx = (uint8_t)v; prefs.putUChar("blank", g_blankIdx); }
+static void setBlank(int v)  { g_blankIdx = (uint8_t)v; }
+static void persistBlank()   { prefs.putUChar("blank", g_blankIdx); }
 
 static void settingsEnter() { s_menuIdx = 0; s_navAccum = 0; s_menuEditing = false; enterState(ST_SETTINGS); }
-static void settingsExit()  { s_navAccum = 0; s_menuEditing = false; enterState(ST_IDLE); }
+// Leaving the menu resyncs to whatever is physically on the base (bottles may
+// have been seated/removed while the menu owned the screen).
+static void settingsExit()  { s_navAccum = 0; s_menuEditing = false; enterCombo(s_sensedCombo); }
 static void diagEnter()     { s_navAccum = 0; s_menuEditing = false; enterState(ST_DIAG); }
 
 enum ItemKind { K_CHOICE, K_RANGE, K_INFO, K_ACTION };
@@ -420,7 +406,8 @@ struct MenuItem {
   const char*        label;
   ItemKind           kind;
   int  (*get)();
-  void (*set)(int);
+  void (*set)(int);              // apply live while editing
+  void (*persist)();             // write NVS — called on confirm only
   const char* const* choices;    // K_CHOICE
   int                nChoices;
   int                rmin, rmax;  // K_RANGE
@@ -429,14 +416,14 @@ struct MenuItem {
 };
 
 static const MenuItem kMenu[] = {
-  { "Realm",        K_CHOICE, getRealm,  setRealm,  kUniverseName, UNI_COUNT, 0, 0, nullptr,    nullptr      },
-  { "Mute",         K_CHOICE, getMute,   setMute,   kOnOff,        2,         0, 0, nullptr,    nullptr      },
-  { "Bright",       K_RANGE,  getBright,   setBright,   nullptr,     0,      1, 5, nullptr,    nullptr      },
-  { "Stir Level",   K_CHOICE, getStirLevel, setStirLevel, kStirLabels, kStirN, 0, 0, nullptr,  nullptr      },
-  { "Sleep",        K_CHOICE, getBlank,  setBlank,  kBlankLabels,  kBlankN,   0, 0, nullptr,    nullptr      },
-  { "Hardware Test",K_ACTION, nullptr,   nullptr,   nullptr,       0,         0, 0, nullptr,    diagEnter    },
-  { "Firmware",     K_INFO,   nullptr,   nullptr,   nullptr,       0,         0, 0, FW_VERSION, nullptr      },
-  { "Exit",         K_ACTION, nullptr,   nullptr,   nullptr,       0,         0, 0, nullptr,    settingsExit },
+  { "Realm",        K_CHOICE, getRealm,     setRealm,     persistRealm,     kUniverseName, UNI_COUNT, 0, 0, nullptr,    nullptr      },
+  { "Mute",         K_CHOICE, getMute,      setMute,      persistMute,      kOnOff,        2,         0, 0, nullptr,    nullptr      },
+  { "Bright",       K_RANGE,  getBright,    setBright,    persistBright,    nullptr,       0,         1, 5, nullptr,    nullptr      },
+  { "Stir Level",   K_CHOICE, getStirLevel, setStirLevel, persistStirLevel, kStirLabels,   kStirN,    0, 0, nullptr,    nullptr      },
+  { "Sleep",        K_CHOICE, getBlank,     setBlank,     persistBlank,     kBlankLabels,  kBlankN,   0, 0, nullptr,    nullptr      },
+  { "Hardware Test",K_ACTION, nullptr,      nullptr,      nullptr,          nullptr,       0,         0, 0, nullptr,    diagEnter    },
+  { "Firmware",     K_INFO,   nullptr,      nullptr,      nullptr,          nullptr,       0,         0, 0, FW_VERSION, nullptr      },
+  { "Exit",         K_ACTION, nullptr,      nullptr,      nullptr,          nullptr,       0,         0, 0, nullptr,    settingsExit },
 };
 static const int kMenuN = (int)(sizeof(kMenu) / sizeof(kMenu[0]));
 
@@ -469,12 +456,21 @@ static void updateMenuNav(int32_t d) {
   }
 }
 
-// Press the knob in Settings: confirm an edit, run an action, or enter edit.
+// Press the knob in Settings: confirm an edit (persisting it), run an action,
+// or enter edit (remembering the starting value so cancel can revert).
 static void menuPress() {
-  if (s_menuEditing) { s_menuEditing = false; return; }
+  if (s_menuEditing) {
+    s_menuEditing = false;
+    const MenuItem& m = kMenu[s_menuIdx];
+    if (m.persist) m.persist();
+    return;
+  }
   const MenuItem& m = kMenu[s_menuIdx];
   if (m.kind == K_ACTION) { if (m.action) m.action(); }
-  else if (m.kind == K_CHOICE || m.kind == K_RANGE) { s_menuEditing = true; }
+  else if ((m.kind == K_CHOICE || m.kind == K_RANGE) && m.set) {
+    s_editVal0 = m.get ? m.get() : 0;
+    s_menuEditing = true;
+  }
 }
 
 // ---- Button actions (state-aware) --------------------------------------
@@ -490,10 +486,10 @@ static void onShortPress(uint32_t now) {
         s_revealPhase = RP_ANIM;
         s_revealStyle = (int)(esp_random() % 3);   // pick a random reveal animation
         enterState(ST_REVEAL);                     // stamps the phase clock
-        startMelody(MEL_SUCCESS, NUM_NOTES(MEL_SUCCESS), now);
+        startMelody(MEL_SUCCESS, ARRAY_COUNT(MEL_SUCCESS), now);
         Serial.printf("[reveal] %s\n", kPotions[g_universe][g_combo]);
       } else {
-        startMelody(MEL_NOTREADY, NUM_NOTES(MEL_NOTREADY), now);  // stir first
+        startMelody(MEL_NOTREADY, ARRAY_COUNT(MEL_NOTREADY), now);  // stir first
       }
       break;
     case ST_SETTINGS:
@@ -501,7 +497,8 @@ static void onShortPress(uint32_t now) {
       break;
     case ST_REVEAL:
     case ST_DIAG:
-      break;  // reveal: only a combo change leaves; diag: long-press to exit
+      break;  // reveal: runs out its own timer (an added bottle restarts);
+              // diag: long-press to exit
   }
 }
 
@@ -509,8 +506,11 @@ static void onLongPress(uint32_t now) {
   (void)now;
   switch (g_state) {
     case ST_SETTINGS:
-      if (s_menuEditing) s_menuEditing = false;  // cancel an edit...
-      else settingsExit();                       // ...otherwise leave the menu
+      if (s_menuEditing) {                       // cancel an edit: revert to the
+        const MenuItem& m = kMenu[s_menuIdx];    // value it had when editing began
+        if (m.set) m.set(s_editVal0);            // (nothing was persisted yet)
+        s_menuEditing = false;
+      } else settingsExit();                     // ...otherwise leave the menu
       break;
     case ST_DIAG:     settingsEnter(); break;     // diagnostic back to the menu
     default:          break;
@@ -554,7 +554,11 @@ static void updateStir(uint32_t now, uint32_t dt, int32_t d) {
   // Knob motion spins the swirl and (from identify) starts the stir.
   if (d != 0) {
     s_swirlAngle += STIR_ANGLE_STEP * (float)d;
-    if (g_state == ST_IDENTIFY) { enterState(ST_STIRRING); s_stirZeroMs = now; s_stirMsgBand = -1; }
+    if (g_state == ST_IDENTIFY) {
+      enterState(ST_STIRRING);
+      s_stirZeroMs = now; s_stirMsgBand = -1;
+      s_stirCps = 0; s_rateAcc = 0; s_rateWinMs = now;   // fresh rate window
+    }
   }
 
   if (s_stirReady) return;          // armed: hold the full bar until press/combo change
@@ -567,17 +571,16 @@ static void updateStir(uint32_t now, uint32_t dt, int32_t d) {
   const int lvl = g_stirLevelIdx;
 
   // Estimate current stir rate (counts/sec) over a short window, so the cap
-  // applies smoothly.
-  static uint32_t s_rateWin = 0; static int32_t s_rateAcc = 0; static int s_curCps = 0;
+  // applies smoothly. (The window is reset whenever a stir/brew starts.)
   s_rateAcc += (d < 0) ? -d : d;
-  if (now - s_rateWin >= 120) {
-    s_curCps = (int)(s_rateAcc * 1000 / (now - s_rateWin));
-    s_rateAcc = 0; s_rateWin = now;
+  if (now - s_rateWinMs >= 120) {
+    s_stirCps = (int)(s_rateAcc * 1000 / (now - s_rateWinMs));
+    s_rateAcc = 0; s_rateWinMs = now;
   }
 
   // Capped add vs. constant decay. Past cap/gain c/s, faster spinning adds
   // nothing, so the minimum fill time is fixed regardless of spin speed.
-  float addRate = kStirGain[lvl] * (float)s_curCps;
+  float addRate = kStirGain[lvl] * (float)s_stirCps;
   if (addRate > kStirCap[lvl]) addRate = kStirCap[lvl];
   s_stirProgress += addRate * (1.0f - kStirResist[lvl] * s_stirProgress) * (float)dt / 1000.0f;
   s_stirProgress -= kStirDecay[lvl] * (float)dt / 1000.0f;
@@ -692,6 +695,12 @@ static void drawFitted(const char* s, const uint8_t* const fonts[], int nf,
   }
 }
 
+// Serif faces, largest first — the fit-fallback ladder for featured names
+// (single ingredients and potion reveals).
+static const uint8_t* const kSerifFonts[] = {
+  u8g2_font_ncenB14_tr, u8g2_font_ncenB12_tr, u8g2_font_ncenB10_tr
+};
+
 static void renderIdle(uint32_t now) {
   oled.clearBuffer();
   drawTwinkles(now);
@@ -727,10 +736,7 @@ static void renderIdentify(uint32_t now) {
     // One ingredient: small "First ingredient" caption above a large name.
     oled.setFont(u8g2_font_5x8_tr);
     drawCenteredF("First ingredient", 13);
-    static const uint8_t* const fonts[] = {
-      u8g2_font_ncenB14_tr, u8g2_font_ncenB12_tr, u8g2_font_ncenB10_tr
-    };
-    drawFitted(kIngredients[g_universe][first], fonts, 3, 110, 42, 36, 52);
+    drawFitted(kIngredients[g_universe][first], kSerifFonts, 3, 110, 42, 36, 52);
     int sr = ((now / 220) & 1) ? 2 : 1;
     drawSparkle(7, 40, sr);
     drawSparkle(121, 40, sr);
@@ -838,10 +844,7 @@ static void renderStirring(uint32_t now) {
 // Potion name in an elegant serif, scaled to the largest size that fits the
 // cartouche on one or two lines (falls back through smaller faces).
 static void drawPotionName(const char* name) {
-  static const uint8_t* const fonts[] = {
-    u8g2_font_ncenB14_tr, u8g2_font_ncenB12_tr, u8g2_font_ncenB10_tr
-  };
-  drawFitted(name, fonts, 3, 112, 39, 32, 47);
+  drawFitted(name, kSerifFonts, 3, 112, 39, 32, 47);
 }
 
 // --- Reveal animations: three bold, continuously-moving styles ------------
@@ -888,7 +891,9 @@ static void updateReveal(uint32_t now) {
   if (s_revealPhase == RP_ANIM) {
     if (el >= REVEAL_ANIM_MS) { s_revealPhase = RP_NAME; g_stateMs = now; }
   } else {  // RP_NAME
-    if (el >= REVEAL_NAME_MS) enterCombo(0);   // hold elapsed -> back to idle
+    // Hold elapsed: resync to the base — idle if it was cleared, straight
+    // back to identify if bottles are still seated (re-brew without a jiggle).
+    if (el >= REVEAL_NAME_MS) enterCombo(s_sensedCombo);
   }
 }
 
@@ -927,13 +932,18 @@ static const char* menuValueStr(const MenuItem& m, char* buf, int n) {
   return "";
 }
 
-static void renderSettings() {
-  oled.clearBuffer();
+// Inverted title bar shared by the menu screens.
+static void drawTitleBar(const char* title) {
   oled.drawBox(0, 0, 128, 13);
   oled.setDrawColor(0);
   oled.setFont(u8g2_font_helvB08_tr);
-  oled.drawStr(4, 10, "Settings");
+  oled.drawStr(4, 10, title);
   oled.setDrawColor(1);
+}
+
+static void renderSettings() {
+  oled.clearBuffer();
+  drawTitleBar("Settings");
 
   const int VIS = 5;
   int first = 0;
@@ -972,11 +982,7 @@ static void renderSettings() {
 // Built-in live diagnostic (reachable from Settings -> Hardware Test).
 static void renderDiag() {
   oled.clearBuffer();
-  oled.drawBox(0, 0, 128, 13);
-  oled.setDrawColor(0);
-  oled.setFont(u8g2_font_helvB08_tr);
-  oled.drawStr(4, 10, "Hardware Test");
-  oled.setDrawColor(1);
+  drawTitleBar("Hardware Test");
 
   oled.setFont(u8g2_font_helvR08_tr);
   const int rp[3] = { PIN_REED_SLOT1, PIN_REED_SLOT2, PIN_REED_SLOT3 };
@@ -1111,12 +1117,7 @@ void setup() {
   pinMode(PIN_REED_SLOT3, INPUT_PULLUP);
   pinMode(PIN_ENC_SW, INPUT_PULLUP);
 
-  // Encoder channels: internal pullups, decode on every edge of both lines.
-  pinMode(PIN_ENC_A, INPUT_PULLUP);
-  pinMode(PIN_ENC_B, INPUT_PULLUP);
-  s_encPrev = (uint8_t)((digitalRead(PIN_ENC_A) << 1) | digitalRead(PIN_ENC_B));
-  attachInterrupt(digitalPinToInterrupt(PIN_ENC_A), encoderISR, CHANGE);
-  attachInterrupt(digitalPinToInterrupt(PIN_ENC_B), encoderISR, CHANGE);
+  encoderBegin();   // internal pullups, ISR decode on every edge (quadrature.h)
 
   pinMode(PIN_BUZZER, OUTPUT);
 
@@ -1135,16 +1136,30 @@ void setup() {
 
   // OLED. Let U8g2 own the single Wire.begin(); we only preset the C3's I2C
   // pins (calling Wire.begin() ourselves AND letting U8g2 begin() again wedges
-  // the core-3.x i2c-ng driver in ESP_ERR_INVALID_STATE). 400 kHz keeps a
-  // full-buffer send to ~2-3 ms for a smooth swirl.
+  // the core-3.x i2c-ng driver in ESP_ERR_INVALID_STATE). The bus runs at
+  // 100 kHz — reliable on breadboard; a full-buffer send is ~30 ms, which is
+  // why RENDER_INTERVAL_MS caps at ~30 fps. Set the clock AFTER begin():
+  // U8g2's setBusClock() before begin() does not stick.
   Wire.setPins(PIN_OLED_SDA, PIN_OLED_SCL);
-  oled.begin();            // U8g2 owns the single Wire.begin(); bus stays at 100kHz
-  Wire.setClock(100000);   // 100kHz — reliable on breadboard; speed was never the issue
+  oled.begin();            // inits the panel at U8g2's default address 0x3C
+  Wire.setClock(100000);
 
-  // Probe for the panel; if absent/miswired, run headless (skip drawing so we
+  // Probe both common SSD1306 addresses. 0x3C was already initialised by
+  // begin(); a panel strapped to 0x3D needs the address set and the init
+  // sequence re-sent. If neither answers, run headless (skip drawing so we
   // don't flood the log with ESP_ERR_INVALID_STATE every frame).
-  Wire.beginTransmission(0x3C);
-  g_haveDisplay = (Wire.endTransmission() == 0);
+  uint8_t oledAddr = 0;
+  for (uint8_t a : {0x3C, 0x3D}) {
+    Wire.beginTransmission(a);
+    if (Wire.endTransmission() == 0) { oledAddr = a; break; }
+  }
+  if (oledAddr == 0x3D) {
+    oled.setI2CAddress(0x3D << 1);
+    oled.initDisplay();     // what begin() did, re-aimed at 0x3D
+    oled.clearDisplay();
+    oled.setPowerSave(0);
+  }
+  g_haveDisplay = (oledAddr != 0);
   applyBrightness();
 
   // ---- Boot self-check: state what we found, loudly, and don't pretend. ----
@@ -1154,13 +1169,16 @@ void setup() {
   Serial.printf("  encoder: A=GPIO%d B=GPIO%d SW=GPIO%d\n",
                 PIN_ENC_A, PIN_ENC_B, PIN_ENC_SW);
   Serial.printf("  buzzer:  GPIO%d  (mute=%s)\n", PIN_BUZZER, g_mute ? "on" : "off");
-  Serial.printf("  OLED:    SDA=GPIO%d SCL=GPIO%d -> %s\n",
-                PIN_OLED_SDA, PIN_OLED_SCL,
-                g_haveDisplay ? "FOUND at 0x3C [OK]" : "NOT FOUND [FAIL]");
+  if (g_haveDisplay)
+    Serial.printf("  OLED:    SDA=GPIO%d SCL=GPIO%d -> FOUND at 0x%02X [OK]\n",
+                  PIN_OLED_SDA, PIN_OLED_SCL, oledAddr);
+  else
+    Serial.printf("  OLED:    SDA=GPIO%d SCL=GPIO%d -> NOT FOUND [FAIL]\n",
+                  PIN_OLED_SDA, PIN_OLED_SCL);
   Serial.printf("  realm=%s  bright=%d  fw=%s\n",
                 kUniverseName[g_universe], g_brightness, FW_VERSION);
   if (!g_haveDisplay) {
-    Serial.println("  !! OLED not on the bus. Running HEADLESS (no screen).");
+    Serial.println("  !! No OLED at 0x3C/0x3D. Running HEADLESS (no screen).");
     Serial.println("  !! Check VCC=3V3, GND, SDA->GPIO5, SCL->GPIO6; or run c3-hwcheck.");
     if (!g_mute)
       for (int i = 0; i < 3; i++) { tone(PIN_BUZZER, 180); delay(120); noTone(PIN_BUZZER); delay(90); }
@@ -1240,6 +1258,6 @@ void loop() {
   static uint32_t s_lastWarnMs = 0;
   if (!g_haveDisplay && now - s_lastWarnMs >= 5000) {
     s_lastWarnMs = now;
-    Serial.println("[warn] HEADLESS — no OLED at 0x3C on SDA=5/SCL=6 (check wiring)");
+    Serial.println("[warn] HEADLESS — no OLED at 0x3C/0x3D on SDA=5/SCL=6 (check wiring)");
   }
 }

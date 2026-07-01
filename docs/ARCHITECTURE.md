@@ -29,7 +29,8 @@ conventions exist to make that class of bug impossible. Follow them.
 
    *Example — REVEAL:* `RP_ANIM` runs for `REVEAL_ANIM_MS`; when it ends it
    re-stamps the clock and switches to `RP_NAME`, which runs for
-   `REVEAL_NAME_MS`, then `enterCombo(0)` returns to idle. The name is shown for
+   `REVEAL_NAME_MS`, then `enterCombo(s_sensedCombo)` resyncs to the base (idle
+   if it was cleared, identify if bottles remain). The name is shown for
    exactly `REVEAL_NAME_MS` *after the animation finishes*, regardless of the
    animation's length.
 

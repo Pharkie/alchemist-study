@@ -61,6 +61,9 @@ silently bump this pin.
 **Combo bit mapping:** `bit0=slot1, bit1=slot2, bit2=slot3` → combo value `1..7`
 (`0` = empty base = idle).
 
+The canonical pin map in code is **`src/pins.h`** — shared by the firmware and
+both standalone diagnostics, so the wiring can't drift between programs.
+
 ## Libraries
 
 - **U8g2** (`olikraus/U8g2@^2.36.18`) — display, full-buffer:
@@ -73,8 +76,9 @@ silently bump this pin.
 PCNT pulse-counter peripheral, which the C3 lacks (S2/S3/C6 and classic ESP32 have
 it; C3/C2 don't). The library even emits `#warning PCNT not supported on this SoC`
 and fails to link. So the encoder is decoded in software with a tiny GPIO-interrupt
-quadrature routine in `main.cpp` (both channels on `CHANGE`, a 16-entry transition
-table → ±1, internal pullups). `g_encoderCount` is the running signed position.
+quadrature routine in `src/quadrature.h` (both channels on `CHANGE`, a 16-entry
+transition table → ±1, internal pullups; shared by `main.cpp` and `hwcheck.cpp`).
+`g_encoderCount` is the running signed position.
 
 ## Architecture — single `src/main.cpp`, clean state machine
 
@@ -98,8 +102,9 @@ States: **IDLE → IDENTIFY → STIRRING → REVEAL**
   **"Press to create"** call-to-action (held until a press or a real combo change).
 - **REVEAL** — one of **three random full-screen animations** (radar sweep /
   rising liquid / expanding rings) reveals the potion name (wrapped to two lines
-  if wide) over a short ascending jingle. After ~3 s it auto-returns to IDLE
-  ("Place ingredients"), ready for the next brew.
+  if wide) over a short ascending jingle. After ~3 s it **resyncs to the base**:
+  back to IDLE if the bottles were cleared, or straight to IDENTIFY if they're
+  still seated (so you can re-brew without reseating anything).
 
 ### Interaction rules
 
@@ -121,10 +126,12 @@ States: **IDLE → IDENTIFY → STIRRING → REVEAL**
 ### Settings menu (`ST_SETTINGS`) — a reusable mini-menu
 
 Open with a press on the idle screen. **Turn** to move between items; **press**
-to start editing a value, **turn** to change it (live), **press** to confirm;
-**long-press** cancels an edit, or (when not editing) leaves the menu. Actions
-(Hardware Test, Exit) run on press. Items are a data table (`kMenu` in
-`main.cpp`) of `{label, kind, get/set, …}`, so adding one is a single row.
+to start editing a value, **turn** to change it (applied live), **press** to
+confirm — the NVS write happens on confirm; **long-press** cancels an edit and
+**reverts** the value, or (when not editing) leaves the menu (resyncing to
+whatever bottles are on the base). Actions (Hardware Test, Exit) run on press.
+Items are a data table (`kMenu` in `main.cpp`) of `{label, kind, get/set/persist,
+…}`, so adding one is a single row.
 
 - **Realm** — 7 universes: Skyrim, Baldur's Gate 3, The Witcher 3, World of
   Warcraft, Zelda, Minecraft, Ultima VII (persisted; replaces the old long-press)
@@ -133,14 +140,16 @@ to start editing a value, **turn** to change it (live), **press** to confirm;
 - **Stir Level** — Easy / Medium / Hard (fill difficulty curve)
 - **Sleep** — screen-blank timeout: Never / 10s / 1m / 5m / 30m. The OLED powers
   down (`setPowerSave`) after that long with no input and wakes on any encoder /
-  reed / button activity (the waking gesture is swallowed so it doesn't also act).
+  reed / button activity. A waking **turn or press is swallowed** so it doesn't
+  also act; a **reed change still registers** (seating a bottle should count).
 - **Hardware Test** — opens a built-in live diagnostic (`ST_DIAG`): reed/button
   boxes + encoder count; long-press to return. (Same idea as the `c3-hwcheck`
   build, but in-firmware so it needs no reflash.)
 - **Firmware** — shows the version string
 - **Exit** — back to idle
 
-Realm, Mute, Brightness, Stir Level and Sleep all persist to NVS.
+Realm, Mute, Brightness, Stir Level and Sleep all persist to NVS (written when
+an edit is confirmed, not per step).
 
 On boot, an animated ~3 s splash ("Welcome to the Alchemist's Study", growing
 title + rising sparkle-chime, gated by Mute) plays before the idle screen.
@@ -240,7 +249,10 @@ Slots per universe: bit0=slot1, bit1=slot2, bit2=slot3.
   as re-stamped sub-phases, `update`/`render` split, latched inputs + grace
   timers. This is the standard — don't reintroduce independent timers or
   instantaneous-input control flow.
-- Keep everything in `src/main.cpp` with the state machine clean and readable.
+- Keep the app in `src/main.cpp` with the state machine clean and readable. The
+  shared pin map (`src/pins.h`) and encoder decoder (`src/quadrature.h`) are the
+  only split-out pieces — they exist so the diagnostics can't drift from the
+  firmware; don't grow them into a module system.
 - Add brief comments explaining the pin choices and the core-3.x dependency.
 - Non-blocking loop: debounce reeds and button by time, no long `delay()`s that
   would stall stir audio/animation.

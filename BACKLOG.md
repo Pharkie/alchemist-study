@@ -3,6 +3,10 @@
 Phased plan. Check items off as completed. See `CLAUDE.md` for the full spec,
 pin map, and potion tables.
 
+> **Status:** Phases 0–6 shipped as **v0.1** (the bench firmware). Items whose
+> behaviour later evolved carry a *(superseded: …)* note. Next up: Stage 2
+> (connectivity), below.
+
 ## Phase 0 — Project setup
 
 Two independent moves here — keep them separate:
@@ -25,54 +29,59 @@ Two independent moves here — keep them separate:
 
 ## Phase 1 — Inputs & sensing
 
-- [ ] Configure reed pins (3, 4, 10) as `INPUT_PULLUP`; read combo `0..7`
+- [x] Configure reed pins (3, 4, 10) as `INPUT_PULLUP`; read combo `0..7`
       with bit mapping `bit0=slot1, bit1=slot2, bit2=slot3` (magnet = LOW = present).
-- [ ] Debounce reed reads (time-based) so a settling bottle doesn't chatter.
-- [ ] Use the `main.cpp` GPIO-interrupt quadrature decoder (A=0, B=7, internal
-      pullups) already scaffolded in Phase 0; read `g_encoderCount` delta per loop
-      for stir progress + swirl angle.
-- [ ] Configure button (SW=20, `INPUT_PULLUP`); detect short press vs
+- [x] Debounce reed reads (time-based) so a settling bottle doesn't chatter.
+- [x] Use the GPIO-interrupt quadrature decoder (A=0, B=7, internal pullups)
+      already scaffolded in Phase 0; read `g_encoderCount` delta per loop for
+      stir progress + swirl angle. *(now lives in `src/quadrature.h`, shared
+      with the diagnostics.)*
+- [x] Configure button (SW=20, `INPUT_PULLUP`); detect short press vs
       long press (≥600 ms) with debounce.
 
 ## Phase 2 — State machine skeleton
 
-- [ ] Implement `IDLE / IDENTIFY / STIRRING / REVEAL` enum + transitions.
-- [ ] Combo change at any time → IDENTIFY (or IDLE when combo == 0).
-- [ ] REVEAL is dismissed **only** by a combo change.
-- [ ] Wire transitions: bottle seated → IDENTIFY; encoder turning → STIRRING;
+- [x] Implement `IDLE / IDENTIFY / STIRRING / REVEAL` enum + transitions.
+- [x] Combo change at any time → IDENTIFY (or IDLE when combo == 0).
+- [x] REVEAL is dismissed **only** by a combo change. *(superseded: the reveal
+      now times out on its own — ~1.3 s animation + ~3 s name — then resyncs to
+      whatever is on the base; an added bottle also restarts it.)*
+- [x] Wire transitions: bottle seated → IDENTIFY; encoder turning → STIRRING;
       knob still → decay back to IDENTIFY; short press (gated on stir) → REVEAL.
 
 ## Phase 3 — Display (U8g2)
 
-- [ ] Init `U8G2_SSD1306_128X64_NONAME_F_HW_I2C` on SDA=5 / SCL=6, full-buffer.
-- [ ] IDLE screen: "Place ingredients" + realm-toggle hint.
-- [ ] IDENTIFY screen: list present ingredient name(s) + "turn to stir".
-- [ ] STIRRING swirl: ring of dim dots, one bright dot orbiting; angle follows
+- [x] Init `U8G2_SSD1306_128X64_NONAME_F_HW_I2C` on SDA=5 / SCL=6, full-buffer.
+- [x] IDLE screen: "Place ingredients" + realm-toggle hint.
+- [x] IDENTIFY screen: list present ingredient name(s) + "turn to stir".
+- [x] STIRRING swirl: ring of dim dots, one bright dot orbiting; angle follows
       the encoder; intensity/decay tracks stir progress.
-- [ ] REVEAL: potion name, word-wrap to two lines if wider than 128px.
+- [x] REVEAL: potion name, word-wrap to two lines if wider than 128px.
 
 ## Phase 4 — Audio (buzzer, GPIO1)
 
-- [ ] Stir brewing trill: pitch rises with stir progress (~320 → ~1100 Hz),
+- [x] Stir brewing trill: pitch rises with stir progress (~320 → ~1100 Hz),
       decays back down when the knob is still.
-- [ ] REVEAL success jingle: short ascending notes.
-- [ ] Universe-toggle: distinct two-note beep.
+- [x] REVEAL success jingle: short ascending notes.
+- [x] Universe-toggle: distinct two-note beep.
 
 ## Phase 5 — Potion data & universes
 
-- [ ] Encode both lookup tables (Skyrim / BG3), indexed by combo `1..7`.
-- [ ] Encode per-universe ingredient slot names for the IDENTIFY screen.
-- [ ] Long press → toggle universe; persist to NVS via `Preferences`; restore
-      on boot.
+- [x] Encode both lookup tables (Skyrim / BG3), indexed by combo `1..7`.
+      *(grown since: seven realms — see CLAUDE.md for all tables.)*
+- [x] Encode per-universe ingredient slot names for the IDENTIFY screen.
+- [x] Long press → toggle universe; persist to NVS via `Preferences`; restore
+      on boot. *(superseded: the realm moved into the Settings menu; long-press
+      now leaves menus / cancels edits.)*
 
 ## Phase 6 — Polish & verify
 
-- [ ] Tune stir feel: progress accumulation, decay rate, gating threshold for
+- [x] Tune stir feel: progress accumulation, decay rate, gating threshold for
       reveal, pitch curve.
-- [ ] Verify non-blocking loop (audio/animation stay smooth; no stalls).
-- [ ] On-hardware pass: all 7 combos × both universes, reveal wrapping,
+- [x] Verify non-blocking loop (audio/animation stay smooth; no stalls).
+- [x] On-hardware pass: all 7 combos × both universes, reveal wrapping,
       toggle persists across reboot.
-- [ ] Comment pass: pin choices + core-3.x dependency rationale in `main.cpp`.
+- [x] Comment pass: pin choices + core-3.x dependency rationale in `main.cpp`.
 
 ---
 

@@ -86,6 +86,7 @@ The same diagnostic is also reachable in-firmware via **Settings → Hardware Te
 | Path | Purpose |
 |---|---|
 | `src/main.cpp` | The firmware: state machine, realms, stir/brew, menu, animations |
+| `src/pins.h`, `src/quadrature.h` | Shared pin map + encoder decoder (used by both programs) |
 | `src/hwcheck.cpp` | Standalone hardware diagnostic (`c3-hwcheck`) |
 | `platformio.ini` | Build environments |
 | `CLAUDE.md` | Full spec: pin map, platform rationale, all realm tables |
