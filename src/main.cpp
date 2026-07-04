@@ -189,8 +189,9 @@ static uint8_t s_questRoll = 14;
 // or two.
 // N_BREW is a story-level brew (outside any battle): the node's `battle` def
 // supplies only the brew fields (title/combo/hint); success advances to
-// nextA, a wrong potion is named and re-tried at leisure (no penalty — the
-// stakes live in battles and use-choices, not at the cauldron).
+// nextA. A wrong potion is named and re-tried at leisure — UNLESS the node
+// sets nextB, which makes the brew ONE-SHOT: the wrong pour routes there
+// (the final exam pattern — the player who followed the clues brews right).
 enum NodeKind { N_CARD, N_SPEAK, N_CHOICE, N_TUNE, N_SCENE, N_BREW, N_BATTLE, N_END };
 
 struct BattleDef {
@@ -300,7 +301,9 @@ static const BattleDef kBrewCounter = {
   nullptr, nullptr, nullptr, 0, 0,
   1,                                   // 001 = the flower — act 1's first recipe
   "Brew: the counter",
-  "'blue mountain flower mends flesh'", 0,
+  // The final exam: the hint asks the QUESTION; the answer was the Jarl's
+  // act 1 line, re-planted as the Afflicted's taunt on the cauldron card.
+  "'what quenches a plague?'", 0,
   0,
 };
 
@@ -405,8 +408,8 @@ static const StoryNode kStorySkyrim[] = {
                   32, 0, 0, 0, 0, 0, 0, nullptr, &kBrewPhantom },
   /*32 sneak  */ { N_SCENE, nullptr, nullptr, nullptr, nullptr,   // invisible
                   33, 0, 0, 0, 0, 0, 5600, drawSneak, nullptr },
-  /*33 cauldron*/{ N_CARD, "The Cauldron",
-                  "It seethes - a plague to fill every river in Skyrim. One chance.",
+  /*33 cauldron*/{ N_CARD, "The Cauldron",     // the taunt IS the clue
+                  "It seethes. The Afflicted chant: 'No flower mends THIS.' One pour - one chance.",
                   nullptr, nullptr, 34, 0, 0, 0, 0, 0, 0, nullptr, nullptr },
   /*34 use    */ { N_CHOICE, "The great cauldron:", nullptr,
                   "Tip it over", "Counter-brew it",
@@ -414,8 +417,8 @@ static const StoryNode kStorySkyrim[] = {
   /*35 spilled*/ { N_CARD, "Spilled!",         // force is the trap, one last time
                   "It floods the floor - the mist rises hungry. You flee to try again.",
                   nullptr, nullptr, 34, 0, 0, 0, 0, 0, 0, nullptr, nullptr },
-  /*36 counter*/ { N_BREW, nullptr, nullptr, nullptr, nullptr,
-                  37, 0, 0, 0, 0, 0, 0, nullptr, &kBrewCounter },
+  /*36 counter*/ { N_BREW, nullptr, nullptr, nullptr, nullptr,   // ONE SHOT:
+                  37, 41, 0, 0, 0, 0, 0, nullptr, &kBrewCounter },  // wrong -> 41
   /*37 poured */ { N_CARD, "The Counter-Brew", // act 1's flower saves the realm
                   "The flower falls in. The cauldron clears... Peryite SCREAMS.",
                   nullptr, nullptr, 38, 0, 0, 0, 0, 0, 0, nullptr, nullptr },
@@ -427,6 +430,12 @@ static const StoryNode kStorySkyrim[] = {
                   nullptr, nullptr, 40, 0, 0, 0, 0, 0, 0, drawJarl, nullptr },
   /*40 the end*/ { N_CARD, "The End",          // and a tease for other realms
                   "Your study glows warm. Seven realms await new tales...",
+                  nullptr, nullptr, 15, 0, 0, 0, 0, 0, 0, nullptr, nullptr },
+  /*41 wrong  */ { N_CARD, "The Wrong Brew",   // the exam, failed
+                  "The cauldron drinks it - and ROARS. The mist pours into the night.",
+                  nullptr, nullptr, 42, 0, 0, 0, 0, 0, 0, nullptr, nullptr },
+  /*42 bad end*/ { N_CARD, "Bad Ending",       // fail forward: whisper the clue
+                  "Skyrim's rivers run grey. Remember the Jarl's words... and try again.",
                   nullptr, nullptr, 15, 0, 0, 0, 0, 0, 0, nullptr, nullptr },
 };
 
@@ -763,13 +772,18 @@ static void storyBrewResolve() {
   bool ok = (g_combo == s_bdef->brewCombo);
   Serial.printf("[story] brew %s (combo %u)\n", ok ? "OK" : "wrong", g_combo);
 
-  if (n.kind == N_BREW) {                  // story brew: retry at leisure
+  if (n.kind == N_BREW) {
     if (ok) {
       s_storyBrew = false;
       startMelody(MEL_SUCCESS, ARRAY_COUNT(MEL_SUCCESS), g_now);
       enterState(ST_STORY);
       storyGoto(n.nextA);
-    } else {
+    } else if (n.nextB) {                  // one-shot brew: the wrong pour lands
+      s_storyBrew = false;
+      startMelody(MEL_KO, ARRAY_COUNT(MEL_KO), g_now);
+      enterState(ST_STORY);
+      storyGoto(n.nextB);
+    } else {                               // ordinary story brew: retry at leisure
       snprintf(s_bmsg, sizeof(s_bmsg), "That was %s!",
                kPotions[g_universe][g_combo]);
       startMelody(MEL_NOTREADY, ARRAY_COUNT(MEL_NOTREADY), g_now);

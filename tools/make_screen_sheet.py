@@ -64,9 +64,10 @@ SECTIONS = [
         (30, "Brew the Philter (all three)"),
         (31, "Invisible among the Afflicted"),
         (32, "The cauldron — final use-choice"),
-        (33, "The counter — act 1's recipe"),
-        (34, "Realm saved"),
-        (35, "The Jarl's bookend"),
+        (33, "The final exam — one pour"),
+        (34, "Bad ending (wrong brew)"),
+        (35, "Realm saved"),
+        (36, "The Jarl's bookend"),
     ]),
 ]
 
