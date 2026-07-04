@@ -57,7 +57,7 @@ SECTIONS = [
         (25, "Confront or watch"),
         (26, "Brew the lingering poison"),
         (27, "The feast — use-choice"),
-        (28, "Confession under duress"),
+        (28, "Dying words name Peryite"),
         (29, "Peryite — Act 3 hook"),
     ]),
 ]

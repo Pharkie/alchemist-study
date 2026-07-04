@@ -371,10 +371,10 @@ static const StoryNode kStorySkyrim[] = {
                   "Guards see only a drawn blade. A cold night in the cells.",
                   nullptr, nullptr, 24, 0, 0, 0, 0, 0, 0, nullptr, nullptr },
   /*26 goblet */ { N_CARD, "The Goblet",
-                  "He drinks. He sweats. He claws his throat - the hall falls silent.",
+                  "He drinks - and blackens. The hall gasps. Dying, he laughs...",
                   nullptr, nullptr, 27, 0, 0, 0, 0, 0, 0, nullptr, nullptr },
-  /*27 confess*/ { N_SPEAK, "The Steward",     // confession under duress
-                  "Mercy! The antidote! Peryite's cauldron BREWS!",
+  /*27 dying  */ { N_SPEAK, "The Steward",     // dying words name his master
+                  "You fools! Peryite avenges his loyal servants!",
                   nullptr, nullptr, 28, 0, 0, 0, 0, 0, 0, drawSteward, nullptr },
   /*28 peryite*/ { N_CARD, "Peryite",          // stakes go realm-wide
                   "Plague god. His shrine smokes in the mountains. Act 3 awaits...",
@@ -2277,23 +2277,31 @@ static void renderStory(uint32_t now) {
 // With nothing seated a press backs out to the fight (no turn consumed).
 // STIRRING keeps its normal vortex/power-bar screen.
 static void renderStoryBrew(uint32_t now) {
-  (void)now;
   oled.clearBuffer();
   drawTitleBar(s_bdef->brewTitle);
   oled.setFont(u8g2_font_5x8_tr);
   bool canBack = (s_story[s_node].kind != N_BREW);   // story brews must be brewed
+  const char* hint = (s_bdef->hint &&
+                      (s_bdef->hintFlag == 0 || (s_flags & s_bdef->hintFlag)))
+                         ? s_bdef->hint : nullptr;
   if (g_combo == 0) {
     drawCenteredF("Place ingredients", 28);
-    if (s_bdef->hint &&
-        (s_bdef->hintFlag == 0 || (s_flags & s_bdef->hintFlag)))
-      drawWrapped(s_bdef->hint, 64, 41, 8, 2, 120);
+    if (hint) drawWrapped(hint, 64, 41, 8, 2, 120);
     if (canBack) drawCenteredF("press to go back", 62);
   } else {
     int y = 27;
     for (int s = 0; s < 3; s++)
       if (g_combo & (1 << s)) { drawCenteredF(kIngredients[g_universe][s], y); y += 10; }
-    if (s_bmsg[0]) drawWrapped(s_bmsg, 64, 53, 8, 2, 124);  // wrong-potion note
-    else drawCenteredF("turn to stir", 62);
+    // Bottom note: after a wrong brew, alternate WHAT went wrong with the
+    // recipe hint (what to do instead) — feedback plus the fix, not a shrug.
+    if (s_bmsg[0] && hint)
+      drawWrapped(((now / 2500) & 1) ? hint : s_bmsg, 64, 53, 8, 2, 124);
+    else if (s_bmsg[0])
+      drawWrapped(s_bmsg, 64, 53, 8, 2, 124);
+    else if (hint)
+      drawWrapped(((now / 2500) & 1) ? "turn to stir" : hint, 64, 53, 8, 2, 124);
+    else
+      drawCenteredF("turn to stir", 62);
   }
   oled.sendBuffer();
 }

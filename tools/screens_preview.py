@@ -533,7 +533,7 @@ def build():
                         title="Brew: lingering poison"))
     shot(lambda s: choice_scene(s, now, "At the feast:", "Lace his goblet", 2))
     shot(lambda s: speak(s, "The Steward",
-                         "Mercy! The antidote! Peryite's cauldron BREWS!", now, art=steward))
+                         "You fools! Peryite avenges his loyal servants!", now, art=steward))
     shot(lambda s: story_card(s, "Peryite",
                               "Plague god. His shrine smokes in the mountains. Act 3 awaits...", 100))
     return shots
