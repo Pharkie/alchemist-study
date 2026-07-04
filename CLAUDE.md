@@ -96,12 +96,18 @@ States: **IDLE → IDENTIFY → STIRRING → REVEAL**, plus **STORY**
   adding a mode is one enum entry + one row). The Story panel's d20 tumbles
   lazily in 3D. No realm shown here; it lives in Settings. Exiting
   Settings/Story back to idle lands on that panel.
-- **STORY** — the adventure (Skyrim Act 1: the road/Jarl choice → the rat
-  battle with its forced healing brew → The Bannered Mare inn, mead or
-  sweetroll, rest, act-2 tease), built on a **data-driven story engine**: a
-  story is a table of `StoryNode`s (card / **speak** / choice / battle / end)
-  linked by successor indices, so acts and universes are pure data
-  (`kStorySkyrim`). `N_SPEAK` renders a character: a procedural **emblem**
+- **STORY** — the adventure (Skyrim, three-act Peryite arc; Acts 1–2 built).
+  Act 1: road/Jarl choice → rat battle with forced healing brew → The
+  Bannered Mare (gold economy, lute, campfire sleep). Act 2 "The Steward's
+  Goblet": Danica diagnoses the festering bite → granary → recipe spoken →
+  confront/watch → brew Lingering Damage Poison (011) → feast use-choice →
+  confession under duress → Peryite revealed. Built on a **data-driven story
+  engine**: a story is a table of `StoryNode`s (card / **speak** / choice /
+  tune / scene / **brew** / battle / end) linked by successor indices, so
+  acts and universes are pure data (`kStorySkyrim`). `N_BREW` runs the brew
+  machinery outside battle (wrong potion named, retried at leisure, no
+  backing out). **Recipe rule:** every act's target recipe is SPOKEN in
+  dialogue before the brew and repeated as the brew-screen hint. `N_SPEAK` renders a character: a procedural **emblem**
   on the left (the node's `art` fn — `drawJarl` is a bobbing, glinting crown;
   emblems beat literal faces at 30 px), speech bubble with tail on the right,
   speaker name beneath.
