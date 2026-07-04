@@ -51,6 +51,15 @@ SECTIONS = [
         (21, "Campfire scene (sleep)"),
         (22, "Act 2 — awake, full HP"),
     ]),
+    ("Act 2 — The Steward's Goblet", [
+        (23, "Danica diagnoses the bite"),
+        (24, "The granary card"),
+        (25, "Confront or watch"),
+        (26, "Brew the lingering poison"),
+        (27, "The feast — use-choice"),
+        (28, "Confession under duress"),
+        (29, "Peryite — Act 3 hook"),
+    ]),
 ]
 
 

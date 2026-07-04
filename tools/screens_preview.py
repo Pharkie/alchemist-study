@@ -206,8 +206,42 @@ def story_card(s, title, body, now, show_hp=False, php=30):
     s.draw_centered("- press -", 58)
 
 
-def speak(s, speaker, words, now):
-    crown(s, 20, 30, now)
+def healer(s, cx, cy, now):
+    s.draw_filled_ellipse(cx, cy + 6, 13, 8)
+    s.set_draw_color(0)
+    s.draw_box(cx - 14, cy - 4, 29, 8)
+    s.set_draw_color(1)
+    s.draw_box(cx - 13, cy + 3, 27, 3)
+    s.draw_box(cx - 5, cy + 14, 10, 3)
+    a = 0.6 + 0.25 * math.sin(now * 0.004)
+    tx = cx + lroundf(16.0 * math.cos(a))
+    ty = cy + 4 - lroundf(20.0 * math.sin(a))
+    for o in (-1, 0, 1):
+        s.draw_line(cx + 2 + o, cy + 4, tx + o, ty)
+    s.draw_disc(tx, ty, 3)
+    if (now // 400) % 2:
+        s.draw_pixel(cx - 6, cy - 2)
+        s.draw_pixel(cx - 9, cy - 5)
+
+
+def steward(s, cx, cy, now):
+    s.draw_box(cx - 8, cy - 14, 17, 7)
+    s.draw_triangle(cx - 8, cy - 7, cx + 8, cy - 7, cx, cy + 1)
+    s.draw_box(cx - 1, cy + 1, 3, 8)
+    s.draw_box(cx - 6, cy + 9, 13, 3)
+    s.set_draw_color(0)
+    for x in range(cx - 7, cx + 8):
+        s.draw_pixel(x, cy - 12 + lroundf(1.2 * math.sin(x * 0.9 + now * 0.005)))
+    s.set_draw_color(1)
+    fall = (now // 60) % 26
+    s.draw_pixel(cx + 9, cy - 13 + fall)
+    s.draw_pixel(cx + 9, cy - 12 + fall)
+    if fall > 13:
+        s.draw_pixel(cx + 9, cy - 13)
+
+
+def speak(s, speaker, words, now, art=None):
+    (art or crown)(s, 20, 30, now)
     s.set_font("4x6")
     nw = s.get_str_width(speaker)
     s.draw_str(max(1, 20 - nw // 2), 62, speaker)
@@ -259,11 +293,11 @@ def roll_frame(s, el, roll):
             s.draw_circle(64, 32, 30 + hold // 6)
 
 
-def brew(s, combo_names, hint=None):
+def brew(s, combo_names, hint=None, title="Brew: healing potion"):
     s.draw_box(0, 0, 128, 13)
     s.set_draw_color(0)
     s.set_font("helvB08")
-    s.draw_str(4, 10, "Brew: healing potion")
+    s.draw_str(4, 10, title)
     s.set_draw_color(1)
     s.set_font("5x8")
     if not combo_names:
@@ -489,6 +523,19 @@ def build():
     shot(lambda s: story_card(s, "Act 2",
                               "You wake healed. Yet the rat bite weeps...", 100,
                               show_hp=True, php=30))
+    shot(lambda s: speak(s, "Healer Danica",
+                         "Deathbell rot. No rat carries this. Something FED it.",
+                         now, art=healer))
+    shot(lambda s: story_card(s, "The Granary",
+                              "Black petals in the grain. One man holds the key: the steward.", 100))
+    shot(lambda s: choice_scene(s, now, "The steward...", "Watch the granary", 2))
+    shot(lambda s: brew(s, [], "'deathbell bound to the flower'",
+                        title="Brew: lingering poison"))
+    shot(lambda s: choice_scene(s, now, "At the feast:", "Lace his goblet", 2))
+    shot(lambda s: speak(s, "The Steward",
+                         "Mercy! The antidote! Peryite's cauldron BREWS!", now, art=steward))
+    shot(lambda s: story_card(s, "Peryite",
+                              "Plague god. His shrine smokes in the mountains. Act 3 awaits...", 100))
     return shots
 
 

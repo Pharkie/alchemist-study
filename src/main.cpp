@@ -187,7 +187,11 @@ static uint8_t s_questRoll = 14;
 // attacks' max damage (2 x 7 = 14) so the crit lands before the enemy can
 // die, and stay low enough that honest post-heal rolls finish within a turn
 // or two.
-enum NodeKind { N_CARD, N_SPEAK, N_CHOICE, N_TUNE, N_SCENE, N_BATTLE, N_END };
+// N_BREW is a story-level brew (outside any battle): the node's `battle` def
+// supplies only the brew fields (title/combo/hint); success advances to
+// nextA, a wrong potion is named and re-tried at leisure (no penalty — the
+// stakes live in battles and use-choices, not at the cauldron).
+enum NodeKind { N_CARD, N_SPEAK, N_CHOICE, N_TUNE, N_SCENE, N_BREW, N_BATTLE, N_END };
 
 struct BattleDef {
   const char* name;       // HP bar label
@@ -255,7 +259,9 @@ static float s_phpShown = 0.0f, s_ehpShown = 0.0f; // animated bar values
 // and/or sleep by the fire) -> act 2 tease.
 static void drawRat(int cx, int cy, uint32_t now);      // sprites & scenes,
 static void drawJarl(int cx, int cy, uint32_t now);     // defined with the
-static void drawLuteNotes(int cx, int cy, uint32_t now);// rest of the art
+static void drawHealer(int cx, int cy, uint32_t now);   // rest of the art
+static void drawSteward(int cx, int cy, uint32_t now);
+static void drawLuteNotes(int cx, int cy, uint32_t now);
 static void drawCampfire(int cx, int cy, uint32_t now);
 
 enum { SF_JARL = 0x01 };   // saw the Jarl: hint earned, but ambushed at dusk
@@ -267,6 +273,17 @@ static const BattleDef kBtRat = {
   "Brew: healing potion",
   "'blue mountain flower mends flesh'", SF_JARL,
   SF_JARL,
+};
+
+// Act 2's goblet poison — a brew-only def (no battle fields used): the
+// N_BREW node borrows just the title/combo/hint. Hint always shows (Danica
+// taught the recipe to everyone, per the seeding rule).
+static const BattleDef kBrewGoblet = {
+  nullptr, nullptr, nullptr, 0, 0,
+  3,                                   // 011 = Flower + Deathbell = Lingering Damage Poison
+  "Brew: lingering poison",
+  "'deathbell bound to the flower'", 0,
+  0,
 };
 
 // Node fields: kind, title, body, optA, optB, nextA, nextB, setFlag,
@@ -315,9 +332,49 @@ static const StoryNode kStorySkyrim[] = {
                   14, 0, 0, 0, 0, 0, 6500, drawCampfire, nullptr },
   /*14 awake */ { N_CARD, "Act 2",   // the wound walks into act 2 (max 2 lines)
                   "You wake healed. Yet the rat bite weeps...",
-                  nullptr, nullptr, 15, 0, 0, 99, 0, 0, 0, nullptr, nullptr },
+                  nullptr, nullptr, 16, 0, 0, 99, 0, 0, 0, nullptr, nullptr },
   /*15 end   */ { N_END, nullptr, nullptr, nullptr, nullptr,
                   0, 0, 0, 0, 0, 0, 0, nullptr, nullptr },
+
+  // ---- Act 2: The Steward's Goblet --------------------------------------
+  /*16 diagnose*/ { N_SPEAK, "Healer Danica",   // the bite names the poison
+                  "Deathbell rot. No rat carries this. Something FED it.",
+                  nullptr, nullptr, 17, 0, 0, 0, 0, 0, 0, drawHealer, nullptr },
+  /*17 granary*/ { N_CARD, "The Granary",       // the poison names the man
+                  "Black petals in the grain. One man holds the key: the steward.",
+                  nullptr, nullptr, 18, 0, 0, 0, 0, 0, 0, nullptr, nullptr },
+  /*18 recipe */ { N_SPEAK, "Healer Danica",    // act 2 recipe, spoken first
+                  "Deathbell kills quick. Bound to the flower, pain LINGERS.",
+                  nullptr, nullptr, 19, 0, 0, 0, 0, 0, 0, drawHealer, nullptr },
+  /*19 choice */ { N_CHOICE, "The steward...", nullptr,
+                  "Confront him", "Watch the granary",
+                  20, 21, 0, 0, 0, 0, 0, nullptr, nullptr },
+  /*20 denial */ { N_CARD, "Denial",
+                  "'Prove it,' he smiles. Now he knows you know. The feast is your chance.",
+                  nullptr, nullptr, 22, 0, 0, 0, 0, 0, 0, nullptr, nullptr },
+  /*21 midnight*/{ N_CARD, "Midnight",
+                  "Black petals fall from his sleeve into the grain. Now catch him publicly.",
+                  nullptr, nullptr, 22, 0, 0, 0, 0, 0, 0, nullptr, nullptr },
+  /*22 feast  */ { N_CARD, "The Feast",
+                  "Tonight the steward pours for the Jarl's table. Your chance.",
+                  nullptr, nullptr, 23, 0, 0, 0, 0, 0, 0, nullptr, nullptr },
+  /*23 brew   */ { N_BREW, nullptr, nullptr, nullptr, nullptr,
+                  24, 0, 0, 0, 0, 0, 0, nullptr, &kBrewGoblet },
+  /*24 use    */ { N_CHOICE, "At the feast:", nullptr,
+                  "Lace his goblet", "Draw your blade",
+                  26, 25, 0, 0, 0, 0, 0, nullptr, nullptr },
+  /*25 seized */ { N_CARD, "Seized!",          // the blade is the trap here
+                  "Guards see only a drawn blade. A cold night in the cells.",
+                  nullptr, nullptr, 24, 0, 0, 0, 0, 0, 0, nullptr, nullptr },
+  /*26 goblet */ { N_CARD, "The Goblet",
+                  "He drinks. He sweats. He claws his throat - the hall falls silent.",
+                  nullptr, nullptr, 27, 0, 0, 0, 0, 0, 0, nullptr, nullptr },
+  /*27 confess*/ { N_SPEAK, "The Steward",     // confession under duress
+                  "Mercy! The antidote! Peryite's cauldron BREWS!",
+                  nullptr, nullptr, 28, 0, 0, 0, 0, 0, 0, drawSteward, nullptr },
+  /*28 peryite*/ { N_CARD, "Peryite",          // stakes go realm-wide
+                  "Plague god. His shrine smokes in the mountains. Act 3 awaits...",
+                  nullptr, nullptr, 15, 0, 0, 0, 0, 0, 0, nullptr, nullptr },
 };
 
 // reed debounce / latch
@@ -571,8 +628,9 @@ static void storyEnd() {
 }
 
 // THE story-graph step: enter a node by index. Battles arm themselves from
-// their BattleDef; an entry heal applies (and its card shows the bar rising);
-// the end marker routes home. Everything else just shows.
+// their BattleDef; brews hand straight off to the cauldron; an entry heal
+// applies (and its card shows the bar rising); the end marker routes home.
+static void storyBrewStart();
 static void storyGoto(int idx) {
   s_node = idx;
   g_stateMs = g_now;
@@ -582,6 +640,7 @@ static void storyGoto(int idx) {
     if (s_php > PLAYER_MAX_HP) s_php = PLAYER_MAX_HP;
   }
   if      (n.kind == N_BATTLE) { s_bdef = n.battle; battleReset(); }
+  else if (n.kind == N_BREW)   { s_bdef = n.battle; storyBrewStart(); }
   else if (n.kind == N_CHOICE) s_choiceIdx = 0;
   else if (n.kind == N_END)    storyEnd();
 }
@@ -642,11 +701,31 @@ static void chooseAttack() {
 // story flag up; onShortPress routes the finished stir back here.
 static void storyBrewStart() {
   s_storyBrew = true;
+  s_bmsg[0] = '\0';                        // clear any wrong-potion note
   enterCombo(s_sensedCombo);
 }
 
 static void storyBrewResolve() {
+  const StoryNode& n = s_story[s_node];
   bool ok = (g_combo == s_bdef->brewCombo);
+  Serial.printf("[story] brew %s (combo %u)\n", ok ? "OK" : "wrong", g_combo);
+
+  if (n.kind == N_BREW) {                  // story brew: retry at leisure
+    if (ok) {
+      s_storyBrew = false;
+      startMelody(MEL_SUCCESS, ARRAY_COUNT(MEL_SUCCESS), g_now);
+      enterState(ST_STORY);
+      storyGoto(n.nextA);
+    } else {
+      snprintf(s_bmsg, sizeof(s_bmsg), "That was %s!",
+               kPotions[g_universe][g_combo]);
+      startMelody(MEL_NOTREADY, ARRAY_COUNT(MEL_NOTREADY), g_now);
+      enterCombo(s_sensedCombo);           // reset the stir, stay at the cauldron
+    }
+    return;
+  }
+
+  // Battle brew: consumes the turn either way; the enemy still bites.
   s_storyBrew = false;
   enterState(ST_STORY);
   if (ok) {
@@ -662,11 +741,12 @@ static void storyBrewResolve() {
     startMelody(MEL_NOTREADY, ARRAY_COUNT(MEL_NOTREADY), g_now);
     battlePhase(BP_BREW_BAD);
   }
-  Serial.printf("[story] brew %s (combo %u)\n", ok ? "OK" : "wrong", g_combo);
 }
 
-// Backing out of the cauldron with nothing seated: no turn consumed, no bite.
+// Backing out of the cauldron with nothing seated: in a battle it costs no
+// turn; a story brew (N_BREW) is the road forward, so there's no backing out.
 static void storyBrewCancel() {
+  if (s_story[s_node].kind == N_BREW) return;
   s_storyBrew = false;
   enterState(ST_STORY);
   battlePhase(BP_CHOOSE);
@@ -698,6 +778,8 @@ static void storyPress() {
     case N_SCENE:
       storyGoto(n.nextA);                    // impatient? skip the cinematic
       break;
+    case N_BREW:
+      break;   // unreachable: the brew states own the button while brewing
     case N_CHOICE: {
       int cost = (s_choiceIdx == 1) ? n.costB : n.costA;
       if (cost > s_gold) {                   // can't afford it: the "nope" buzz
@@ -1796,6 +1878,45 @@ static void drawJarl(int cx, int cy, uint32_t now) {
   oled.setDrawColor(1);
 }
 
+// Healer Danica — mortar & pestle, the pestle grinding in slow circles and
+// the odd fleck of herb rising. Twin: emblem sketch via tools/oledsim.py.
+static void drawHealer(int cx, int cy, uint32_t now) {
+  oled.drawFilledEllipse(cx, cy + 6, 13, 8);       // bowl...
+  oled.setDrawColor(0);
+  oled.drawBox(cx - 14, cy - 4, 29, 8);            // ...with the top carved flat
+  oled.setDrawColor(1);
+  oled.drawBox(cx - 13, cy + 3, 27, 3);            // rim
+  oled.drawBox(cx - 5, cy + 14, 10, 3);            // foot
+  float a = 0.6f + 0.25f * sinf((float)now * 0.004f);
+  int tx = cx + (int)lroundf(16.0f * cosf(a));     // pestle rocks as it grinds
+  int ty = cy + 4 - (int)lroundf(20.0f * sinf(a));
+  for (int o = -1; o <= 1; o++)
+    drawLineClipped(cx + 2 + o, cy + 4, tx + o, ty);
+  oled.drawDisc(tx, ty, 3);                        // knob
+  if ((now / 400) & 1) {                           // a pinch of the grind
+    oled.drawPixel(cx - 6, cy - 2);
+    oled.drawPixel(cx - 9, cy - 5);
+  }
+}
+
+// The steward — a goblet with a wobbling wine line and a drip beading off
+// the rim. His emblem is the murder weapon.
+static void drawSteward(int cx, int cy, uint32_t now) {
+  oled.drawBox(cx - 8, cy - 14, 17, 7);            // bowl
+  oled.drawTriangle(cx - 8, cy - 7, cx + 8, cy - 7, cx, cy + 1);  // taper
+  oled.drawBox(cx - 1, cy + 1, 3, 8);              // stem
+  oled.drawBox(cx - 6, cy + 9, 13, 3);             // foot
+  oled.setDrawColor(0);                            // wine line, wobbling
+  for (int x = cx - 7; x < cx + 8; x++)
+    oled.drawPixel(x, cy - 12 + (int)lroundf(1.2f * sinf((float)x * 0.9f +
+                                                         (float)now * 0.005f)));
+  oled.setDrawColor(1);
+  int fall = (int)((now / 60) % 26);               // a drop falls...
+  oled.drawPixel(cx + 9, cy - 13 + fall);
+  oled.drawPixel(cx + 9, cy - 12 + fall);
+  if (fall > 13) oled.drawPixel(cx + 9, cy - 13);  // ...as the next beads up
+}
+
 // Quavers drifting upward on a sway — the lute is heard, not seen. Stems and
 // flags go through drawLineClipped: as a note rises off-screen its stem top
 // goes negative, and raw u8g2 lines would wrap and smear (the vertical
@@ -2140,6 +2261,8 @@ static void renderStory(uint32_t now) {
     case N_SCENE:
       if (n.art) n.art(64, 32, now);         // full-screen cinematic
       break;
+    case N_BREW:
+      break;   // transient — the brew states own the screen
     case N_BATTLE:
       renderStoryBattle(now);
       break;
@@ -2158,17 +2281,19 @@ static void renderStoryBrew(uint32_t now) {
   oled.clearBuffer();
   drawTitleBar(s_bdef->brewTitle);
   oled.setFont(u8g2_font_5x8_tr);
+  bool canBack = (s_story[s_node].kind != N_BREW);   // story brews must be brewed
   if (g_combo == 0) {
     drawCenteredF("Place ingredients", 28);
     if (s_bdef->hint &&
         (s_bdef->hintFlag == 0 || (s_flags & s_bdef->hintFlag)))
       drawWrapped(s_bdef->hint, 64, 41, 8, 2, 120);
-    drawCenteredF("press to go back", 62);
+    if (canBack) drawCenteredF("press to go back", 62);
   } else {
     int y = 27;
     for (int s = 0; s < 3; s++)
       if (g_combo & (1 << s)) { drawCenteredF(kIngredients[g_universe][s], y); y += 10; }
-    drawCenteredF("turn to stir", 62);
+    if (s_bmsg[0]) drawWrapped(s_bmsg, 64, 53, 8, 2, 124);  // wrong-potion note
+    else drawCenteredF("turn to stir", 62);
   }
   oled.sendBuffer();
 }
