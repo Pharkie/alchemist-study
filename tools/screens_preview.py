@@ -461,18 +461,18 @@ def build():
     shot(lambda s: home(s, now, panels, 128, 1))
     shot(lambda s: home(s, now, panels, 256, 2))
     shot(lambda s: story_card(s, "The Alchemist's Quest",
-                              "The Jarl of Whiterun requests your help.", 100))
+                              "Whiterun sickens. Even the bread tastes wrong. The Jarl summons you.", 100))
     shot(lambda s: choice_scene(s, now, "How do you begin?",
                                 "Request audience with Jarl", 7))
     shot(lambda s: speak(s, "Jarl Balgruuf",
-                         "Blue mountain flower mends flesh. Now go!", now))
-    shot(lambda s: battle(s, now, 30, 15, "msg", "A giant rat attacks!"))
+                         "Blue mountain flower mends flesh. Trust no one here.", now))
+    shot(lambda s: battle(s, now, 30, 15, "msg", "Why is this rat so big? Something unnatural here"))
     shot(lambda s: battle(s, now, 23, 15, "choose", "Attack for 4-7"))
     shot(lambda s: roll_frame(s, 500, 14))
     shot(lambda s: roll_frame(s, 1400, 14))
     shot(lambda s: roll_frame(s, 1900, 14))
     shot(lambda s: battle(s, now, 6, 9, "msg",
-                          "CRIT! Festering bite! Your arm goes numb..."))
+                          "CRIT! The bite FESTERS! Your arm goes numb..."))
     shot(lambda s: battle(s, now, 6, 9, "choose", "Brew potion"))
     shot(lambda s: brew(s, [], "'blue mountain flower mends flesh'"))
     shot(lambda s: brew(s, ["Blue Mountain Flower"]))
@@ -487,7 +487,7 @@ def build():
     shot(lambda s: tune(s, now))
     shot(lambda s: campfire(s, 4200))
     shot(lambda s: story_card(s, "Act 2",
-                              "You awake refreshed, ready for adventure.", 100,
+                              "You wake healed. Yet the rat bite weeps...", 100,
                               show_hp=True, php=30))
     return shots
 

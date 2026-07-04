@@ -239,6 +239,7 @@ static constexpr int STORY_START_GOLD = 7;
 static constexpr int CRIT_ON_BITE  = 2;   // this bite is the crit (unless already
 static constexpr int CRIT_HP       = 6;   // brewed) and leaves the player here
 static constexpr uint32_t BATTLE_MSG_MS  = 1500;  // how long each message beat holds
+static constexpr uint32_t BATTLE_CRIT_MS = 2800;  // the crit is a CLUE — let it land
 // The attack roll is a full-screen pinball cutaway: tumble in -> zoom onto
 // the face -> hold the landed number, then the damage resolves.
 static constexpr uint32_t ROLL_TUMBLE_MS = 1100;
@@ -260,7 +261,7 @@ static void drawCampfire(int cx, int cy, uint32_t now);
 enum { SF_JARL = 0x01 };   // saw the Jarl: hint earned, but ambushed at dusk
 
 static const BattleDef kBtRat = {
-  "Rat", "A giant rat attacks!", drawRat,
+  "Rat", "Why is this rat so big? Something unnatural here", drawRat,
   15, 7,
   1,                                   // 001 = Blue Mountain Flower = Minor Healing
   "Brew: healing potion",
@@ -271,8 +272,8 @@ static const BattleDef kBtRat = {
 // Node fields: kind, title, body, optA, optB, nextA, nextB, setFlag,
 //              heal, costA, costB, ms, art, battle
 static const StoryNode kStorySkyrim[] = {
-  /*0 intro  */ { N_CARD, "The Alchemist's Quest",
-                  "The Jarl of Whiterun requests your help.",
+  /*0 intro  */ { N_CARD, "The Alchemist's Quest",   // plants the grain (act 2)
+                  "Whiterun sickens. Even the bread tastes wrong. The Jarl summons you.",
                   nullptr, nullptr, 1, 0, 0, 0, 0, 0, 0, nullptr, nullptr },
   /*1 choice */ { N_CHOICE, "How do you begin?", nullptr,
                   "Take the road", "Request audience with Jarl",
@@ -280,13 +281,14 @@ static const StoryNode kStorySkyrim[] = {
   /*2 road   */ { N_CARD, "The Road",
                   "You take the road. In the tall grass, something stirs...",
                   nullptr, nullptr, 4, 0, 0, 0, 0, 0, 0, nullptr, nullptr },
-  /*3 jarl   */ { N_SPEAK, "Jarl Balgruuf",   // bubble fits ~15 chars x 4 lines
-                  "Blue mountain flower mends flesh. Now go!",
+  /*3 jarl   */ { N_SPEAK, "Jarl Balgruuf",   // bubble fits ~15 chars x 4 lines;
+                  // recipe hint + the intrigue seed (act 2) in nine words
+                  "Blue mountain flower mends flesh. Trust no one here.",
                   nullptr, nullptr, 4, 0, 0, 0, 0, 0, 0, drawJarl, nullptr },
   /*4 battle */ { N_BATTLE, nullptr, nullptr, nullptr, nullptr,
                   5, 6, 0, 0, 0, 0, 0, nullptr, &kBtRat },
-  /*5 won    */ { N_CARD, "Victory!",
-                  "The rat lies slain. Whiterun's gates ahead - and a warm inn.",
+  /*5 won    */ { N_CARD, "Victory!",   // press-gated clue: the rat ATE poison
+                  "The rat lies dead - gums black with deathbell. Whiterun's gates ahead.",
                   nullptr, nullptr, 7, 0, 0, 0, 0, 0, 0, nullptr, nullptr },
   /*6 ko     */ { N_CARD, "Knocked Out",
                   "Darkness takes you... You wake by the roadside. Try again.",
@@ -311,8 +313,8 @@ static const StoryNode kStorySkyrim[] = {
                   drawLuteNotes, nullptr },
   /*13 fire  */ { N_SCENE, nullptr, nullptr, nullptr, nullptr,   // pan + hold
                   14, 0, 0, 0, 0, 0, 6500, drawCampfire, nullptr },
-  /*14 awake */ { N_CARD, "Act 2",
-                  "You awake refreshed, ready for adventure.",
+  /*14 awake */ { N_CARD, "Act 2",   // the wound walks into act 2 (max 2 lines)
+                  "You wake healed. Yet the rat bite weeps...",
                   nullptr, nullptr, 15, 0, 0, 99, 0, 0, 0, nullptr, nullptr },
   /*15 end   */ { N_END, nullptr, nullptr, nullptr, nullptr,
                   0, 0, 0, 0, 0, 0, 0, nullptr, nullptr },
@@ -612,7 +614,7 @@ static void doBite() {
   if (s_biteN == CRIT_ON_BITE && !s_healed) {
     s_php = CRIT_HP;
     s_numb = true;
-    snprintf(s_bmsg, sizeof(s_bmsg), "CRIT! Festering bite! Your arm goes numb...");
+    snprintf(s_bmsg, sizeof(s_bmsg), "CRIT! The bite FESTERS! Your arm goes numb...");
     startMelody(MEL_CRIT, ARRAY_COUNT(MEL_CRIT), g_now);
   } else {
     s_php -= s_bdef->bite;
@@ -774,13 +776,17 @@ static void updateStory(uint32_t now, uint32_t dt) {
         else doBite();
       }
       break;
-    case BP_BITE:
-      if (el >= BATTLE_MSG_MS) {
+    case BP_BITE: {
+      // The crit is a story clue as well as a beat — hold it longer.
+      uint32_t hold = (s_numb && s_biteN == CRIT_ON_BITE) ? BATTLE_CRIT_MS
+                                                          : BATTLE_MSG_MS;
+      if (el >= hold) {
         if (s_php <= 0) { startMelody(MEL_KO, ARRAY_COUNT(MEL_KO), now);
                           storyGoto(n.nextB); }        // knocked out
         else battlePhase(BP_CHOOSE);
       }
       break;
+    }
     case BP_MAULED:
       if (el >= BATTLE_MSG_MS) { startMelody(MEL_KO, ARRAY_COUNT(MEL_KO), now);
                                  storyGoto(n.nextB); }
