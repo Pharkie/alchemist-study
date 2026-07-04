@@ -267,6 +267,7 @@ static void drawHealer(int cx, int cy, uint32_t now);   // rest of the art
 static void drawSteward(int cx, int cy, uint32_t now);
 static void drawLuteNotes(int cx, int cy, uint32_t now);
 static void drawCampfire(int cx, int cy, uint32_t now);
+static void drawSneak(int cx, int cy, uint32_t now);
 
 enum { SF_JARL = 0x01 };   // saw the Jarl: hint earned, but ambushed at dusk
 
@@ -279,14 +280,27 @@ static const BattleDef kBtRat = {
   SF_JARL,
 };
 
-// Act 2's goblet poison — a brew-only def (no battle fields used): the
-// N_BREW node borrows just the title/combo/hint. Hint always shows (Danica
-// taught the recipe to everyone, per the seeding rule).
+// Brew-only defs (no battle fields used): N_BREW nodes borrow just the
+// title/combo/hint. Hints always show, per the recipe-seeding rule.
 static const BattleDef kBrewGoblet = {
   nullptr, nullptr, nullptr, 0, 0,
   3,                                   // 011 = Flower + Deathbell = Lingering Damage Poison
   "Brew: lingering poison",
   "'deathbell bound to the flower'", 0,
+  0,
+};
+static const BattleDef kBrewPhantom = {
+  nullptr, nullptr, nullptr, 0, 0,
+  7,                                   // 111 = all three = Philter of the Phantom
+  "Brew: the Philter",
+  "'all three bottles as one'", 0,
+  0,
+};
+static const BattleDef kBrewCounter = {
+  nullptr, nullptr, nullptr, 0, 0,
+  1,                                   // 001 = the flower — act 1's first recipe
+  "Brew: the counter",
+  "'blue mountain flower mends flesh'", 0,
   0,
 };
 
@@ -378,6 +392,41 @@ static const StoryNode kStorySkyrim[] = {
                   nullptr, nullptr, 28, 0, 0, 0, 0, 0, 0, drawSteward, nullptr },
   /*28 peryite*/ { N_CARD, "Peryite",          // stakes go realm-wide
                   "Plague god. His shrine smokes in the mountains. Act 3 awaits...",
+                  nullptr, nullptr, 29, 0, 0, 0, 0, 0, 0, nullptr, nullptr },
+
+  // ---- Act 3: The Cauldron -----------------------------------------------
+  /*29 shrine */ { N_CARD, "The Shrine",
+                  "Green smoke crowns the shrine. The Afflicted guard every path.",
+                  nullptr, nullptr, 30, 0, 0, 0, 0, 0, 0, nullptr, nullptr },
+  /*30 recipe */ { N_SPEAK, "Healer Danica",   // act 3 recipe, spoken first
+                  "The Philter hides you. ALL THREE bottles, alchemist.",
+                  nullptr, nullptr, 31, 0, 0, 0, 0, 0, 0, drawHealer, nullptr },
+  /*31 philter*/ { N_BREW, nullptr, nullptr, nullptr, nullptr,
+                  32, 0, 0, 0, 0, 0, 0, nullptr, &kBrewPhantom },
+  /*32 sneak  */ { N_SCENE, nullptr, nullptr, nullptr, nullptr,   // invisible
+                  33, 0, 0, 0, 0, 0, 5600, drawSneak, nullptr },
+  /*33 cauldron*/{ N_CARD, "The Cauldron",
+                  "It seethes - a plague to fill every river in Skyrim. One chance.",
+                  nullptr, nullptr, 34, 0, 0, 0, 0, 0, 0, nullptr, nullptr },
+  /*34 use    */ { N_CHOICE, "The great cauldron:", nullptr,
+                  "Tip it over", "Counter-brew it",
+                  35, 36, 0, 0, 0, 0, 0, nullptr, nullptr },
+  /*35 spilled*/ { N_CARD, "Spilled!",         // force is the trap, one last time
+                  "It floods the floor - the mist rises hungry. You flee to try again.",
+                  nullptr, nullptr, 34, 0, 0, 0, 0, 0, 0, nullptr, nullptr },
+  /*36 counter*/ { N_BREW, nullptr, nullptr, nullptr, nullptr,
+                  37, 0, 0, 0, 0, 0, 0, nullptr, &kBrewCounter },
+  /*37 poured */ { N_CARD, "The Counter-Brew", // act 1's flower saves the realm
+                  "The flower falls in. The cauldron clears... Peryite SCREAMS.",
+                  nullptr, nullptr, 38, 0, 0, 0, 0, 0, 0, nullptr, nullptr },
+  /*38 saved  */ { N_CARD, "Realm Saved",
+                  "Skyrim drinks clean. The Jarl names you Alchemist of Whiterun.",
+                  nullptr, nullptr, 39, 0, 0, 99, 0, 0, 0, nullptr, nullptr },
+  /*39 jarl   */ { N_SPEAK, "Jarl Balgruuf",   // the act 1 line, paid off
+                  "You mended more than flesh. Skyrim owes you, alchemist.",
+                  nullptr, nullptr, 40, 0, 0, 0, 0, 0, 0, drawJarl, nullptr },
+  /*40 the end*/ { N_CARD, "The End",          // and a tease for other realms
+                  "Your study glows warm. Seven realms await new tales...",
                   nullptr, nullptr, 15, 0, 0, 0, 0, 0, 0, nullptr, nullptr },
 };
 
@@ -2058,6 +2107,79 @@ static void drawCampfire(int cx, int cy, uint32_t now) {
       oled.drawPixel(ex, ey);
       if (ph < 16) oled.drawPixel(ex + 1, ey);
     }
+  }
+}
+
+// One Afflicted cultist: robed trapezoid (drawn as hand-clamped row scans so
+// a figure can slide half off the frame edge without u8g2's unsigned hlines
+// dropping whole rows), bowed hood, coughing bob, slow sway.
+static void drawHooded(int x, int y, uint32_t now, float phase) {
+  int bob  = (int)lroundf(1.5f * sinf((float)now * 0.005f + phase));
+  int sway = (int)lroundf(1.0f * sinf((float)now * 0.002f + phase * 2.0f));
+  x += sway;
+  for (int r = 0; r <= 20; r++) {                  // robe: 5 -> 10 half-width
+    int half = 5 + (r * 5) / 20;
+    int lx = x - half, rx = x + half;
+    if (rx < 0 || lx > 127) continue;
+    if (lx < 0) lx = 0;
+    if (rx > 127) rx = 127;
+    oled.drawHLine((u8g2_uint_t)lx, (u8g2_uint_t)(y - 20 + r),
+                   (u8g2_uint_t)(rx - lx + 1));
+  }
+  int lx = x - 4, rx = x + 4;                      // shoulders/neck
+  if (rx >= 0 && lx <= 127) {
+    if (lx < 0) lx = 0;
+    if (rx > 127) rx = 127;
+    oled.drawBox((u8g2_uint_t)lx, (u8g2_uint_t)(y - 23),
+                 (u8g2_uint_t)(rx - lx + 1), 5);
+  }
+  oled.drawDisc(x + 1, y - 26 + bob, 6);           // hood (per-pixel safe)
+  oled.setDrawColor(0);
+  oled.drawDisc(x + 3, y - 24 + bob, 3);           // the dark inside the cowl
+  oled.setDrawColor(1);
+}
+
+// Sneak scene (N_SCENE, act 3): the camera tracks right through the shrine —
+// swaying Afflicted, brazier smoke — and the only trace of YOU is a trail of
+// footprints appearing across the floor. Invisible, walking. Twin:
+// afflicted_sketch.py via tools/oledsim.py.
+static void drawSneak(int cx, int cy, uint32_t now) {
+  (void)cx; (void)cy;
+  uint32_t el = now - g_stateMs;
+  float t = (el >= 4200) ? 1.0f : (float)el / 4200.0f;
+  float e = t * t * (3.0f - 2.0f * t);
+  int cam = (int)lroundf(e * 110.0f);              // pans right, then holds
+
+  oled.drawHLine(0, 54, 128);                      // shrine floor
+  for (int b = 0; b < 2; b++) {                    // braziers
+    int x = (b ? 156 : 66) - cam;
+    if (x - 3 >= 0 && x + 4 < 128) {
+      oled.drawBox(x - 3, 50, 7, 4);
+      oled.drawVLine(x, 46, 4);
+    }
+  }
+  for (int i = 0; i < 4; i++) {                    // brazier smoke wisps
+    int rise = (int)((now / 20 + i * 43) % 70);
+    int vx = 66 + (i % 2) * 90;
+    int head = 44 - rise;
+    int x0 = vx - cam;
+    if (x0 > -8 && x0 < 136 && head >= 0 && head < 64) {
+      float amp = 1.5f + (float)rise * 0.09f;
+      int x = x0 + (int)lroundf(amp * sinf((float)(head + rise) * 0.2f +
+                                           (float)now * 0.002f + i));
+      oled.drawPixel(x, head);
+      oled.drawPixel(x + 1, head);
+    }
+  }
+  static const int16_t kVx[4] = { 30, 104, 186, 238 };   // the Afflicted
+  for (int i = 0; i < 4; i++) {
+    int x = kVx[i] - cam;
+    if (x > -20 && x < 148) drawHooded(x, 54, now, i * 1.9f);
+  }
+  int steps = (int)(el / 260);                     // your footprints, appearing
+  for (int k = 0; k < steps; k++) {
+    int fx = 6 + k * 9 - cam;
+    if (fx >= 0 && fx < 126) oled.drawHLine((u8g2_uint_t)fx, (k & 1) ? 60 : 58, 3);
   }
 }
 

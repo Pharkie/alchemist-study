@@ -480,6 +480,55 @@ def campfire(s, el):
                 s.draw_pixel(ex + 1, ey)
 
 
+def hooded(s, x, y, now, phase):
+    bob = lroundf(1.5 * math.sin(now * 0.005 + phase))
+    sway = lroundf(1.0 * math.sin(now * 0.002 + phase * 2))
+    x += sway
+    for r in range(21):
+        half = 5 + (r * 5) // 20
+        lx, rx = max(0, x - half), min(127, x + half)
+        if rx >= 0 and lx <= 127 and rx >= lx:
+            s.draw_hline(lx, y - 20 + r, rx - lx + 1)
+    lx, rx = max(0, x - 4), min(127, x + 4)
+    if rx >= lx:
+        s.draw_box(lx, y - 23, rx - lx + 1, 5)
+    s.draw_disc(x + 1, y - 26 + bob, 6)
+    s.set_draw_color(0)
+    s.draw_disc(x + 3, y - 24 + bob, 3)
+    s.set_draw_color(1)
+
+
+def sneak(s, el):
+    now = el
+    t = min(1.0, el / 4200.0)
+    e = t * t * (3 - 2 * t)
+    cam = lroundf(e * 110.0)
+    s.draw_hline(0, 54, 128)
+    for b in range(2):
+        x = (156 if b else 66) - cam
+        if 0 <= x - 3 and x + 4 < 128:
+            s.draw_box(x - 3, 50, 7, 4)
+            s.draw_vline(x, 46, 4)
+    for i in range(4):
+        rise = (now // 20 + i * 43) % 70
+        vx = 66 + (i % 2) * 90
+        head = 44 - rise
+        x0 = vx - cam
+        if -8 < x0 < 136 and 0 <= head < 64:
+            amp = 1.5 + rise * 0.09
+            x = x0 + lroundf(amp * math.sin((head + rise) * 0.2 + now * 0.002 + i))
+            s.draw_pixel(x, head)
+            s.draw_pixel(x + 1, head)
+    for i, vx in enumerate((30, 104, 186, 238)):
+        x = vx - cam
+        if -20 < x < 148:
+            hooded(s, x, 54, now, i * 1.9)
+    for k in range(int(el / 260)):
+        fx = 6 + k * 9 - cam
+        if 0 <= fx < 126:
+            s.draw_hline(fx, 60 if (k & 1) else 58, 3)
+
+
 def build():
     panels = ["place", "story", "settings"]
     shots = []
@@ -536,6 +585,15 @@ def build():
                          "You fools! Peryite avenges his loyal servants!", now, art=steward))
     shot(lambda s: story_card(s, "Peryite",
                               "Plague god. His shrine smokes in the mountains. Act 3 awaits...", 100))
+    shot(lambda s: brew(s, [], "'all three bottles as one'", title="Brew: the Philter"))
+    shot(lambda s: sneak(s, 2600))
+    shot(lambda s: choice_scene(s, now, "The great cauldron:", "Counter-brew it", 2))
+    shot(lambda s: brew(s, [], "'blue mountain flower mends flesh'", title="Brew: the counter"))
+    shot(lambda s: story_card(s, "Realm Saved",
+                              "Skyrim drinks clean. The Jarl names you Alchemist of Whiterun.", 100,
+                              show_hp=True, php=30))
+    shot(lambda s: speak(s, "Jarl Balgruuf",
+                         "You mended more than flesh. Skyrim owes you, alchemist.", now))
     return shots
 
 

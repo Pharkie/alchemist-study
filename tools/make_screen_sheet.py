@@ -60,6 +60,14 @@ SECTIONS = [
         (28, "Dying words name Peryite"),
         (29, "Peryite — Act 3 hook"),
     ]),
+    ("Act 3 — The Cauldron", [
+        (30, "Brew the Philter (all three)"),
+        (31, "Invisible among the Afflicted"),
+        (32, "The cauldron — final use-choice"),
+        (33, "The counter — act 1's recipe"),
+        (34, "Realm saved"),
+        (35, "The Jarl's bookend"),
+    ]),
 ]
 
 
