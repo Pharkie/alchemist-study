@@ -96,12 +96,16 @@ States: **IDLE → IDENTIFY → STIRRING → REVEAL**, plus **STORY**
   adding a mode is one enum entry + one row). The Story panel's d20 tumbles
   lazily in 3D. No realm shown here; it lives in Settings. Exiting
   Settings/Story back to idle lands on that panel.
-- **STORY** — the adventure (Skyrim, three-act Peryite arc; Acts 1–2 built).
-  Act 1: road/Jarl choice → rat battle with forced healing brew → The
-  Bannered Mare (gold economy, lute, campfire sleep). Act 2 "The Steward's
-  Goblet": Danica diagnoses the festering bite → granary → recipe spoken →
-  confront/watch → brew Lingering Damage Poison (011) → feast use-choice →
-  confession under duress → Peryite revealed. Built on a **data-driven story
+- **STORY** — the adventure (Skyrim, three-act Peryite arc; ALL THREE ACTS
+  built, playable end to end). Act 1: road/Jarl choice → rat battle with
+  forced healing brew → The Bannered Mare (gold economy, lute, campfire
+  sleep). Act 2 "The Steward's Goblet": Danica diagnoses the festering bite
+  → granary → recipe spoken → confront/watch → brew Lingering Damage Poison
+  (011) → feast use-choice → the steward dies naming Peryite. Act 3 "The
+  Cauldron": brew the Philter (111) → sneak scene (invisible: only your
+  footprints appear among the Afflicted) → cauldron use-choice → counter-brew
+  is act 1's healing flower (001) → realm saved, Jarl bookend. Brews escalate
+  1 → 2 → 3 bottles then back to 1. Built on a **data-driven story
   engine**: a story is a table of `StoryNode`s (card / **speak** / choice /
   tune / scene / **brew** / battle / end) linked by successor indices, so
   acts and universes are pure data (`kStorySkyrim`). `N_BREW` runs the brew
