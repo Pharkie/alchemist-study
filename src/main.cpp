@@ -242,8 +242,12 @@ static constexpr int PLAYER_MAX_HP   = 30;
 static constexpr int STORY_START_GOLD = 7;
 static constexpr int CRIT_ON_BITE  = 2;   // this bite is the crit (unless already
 static constexpr int CRIT_HP       = 6;   // brewed) and leaves the player here
-static constexpr uint32_t BATTLE_MSG_MS  = 1500;  // how long each message beat holds
-static constexpr uint32_t BATTLE_CRIT_MS = 2800;  // the crit is a CLUE — let it land
+// Cross-app reading minimum: every TIMED message holds a base beat plus
+// reading time (~18 chars/sec). Press-gated screens don't need it; anything
+// that auto-advances does — never flash text a reader can't finish.
+static uint32_t readHoldMs(const char* s) {
+  return 900 + (uint32_t)strlen(s) * 55;
+}
 // The attack roll is a full-screen pinball cutaway: tumble in -> zoom onto
 // the face -> hold the landed number, then the damage resolves.
 static constexpr uint32_t ROLL_TUMBLE_MS = 1100;
@@ -830,7 +834,7 @@ static void updateStory(uint32_t now, uint32_t dt) {
   uint32_t el = now - g_stateMs;
   switch (s_bp) {
     case BP_INTRO:
-      if (el >= BATTLE_MSG_MS) {
+      if (el >= readHoldMs(s_bmsg)) {
         bool ambush = s_bdef->firstStrikeFlag && (s_flags & s_bdef->firstStrikeFlag);
         if (ambush && s_biteN == 0) doBite();
         else battlePhase(BP_CHOOSE);
@@ -852,30 +856,26 @@ static void updateStory(uint32_t now, uint32_t dt) {
       }
       break;
     case BP_HIT:
-      if (el >= BATTLE_MSG_MS) {
+      if (el >= readHoldMs(s_bmsg)) {
         if (s_ehp <= 0) { startMelody(MEL_SUCCESS, ARRAY_COUNT(MEL_SUCCESS), now);
                           storyGoto(n.nextA); }        // won
         else doBite();
       }
       break;
-    case BP_BITE: {
-      // The crit is a story clue as well as a beat — hold it longer.
-      uint32_t hold = (s_numb && s_biteN == CRIT_ON_BITE) ? BATTLE_CRIT_MS
-                                                          : BATTLE_MSG_MS;
-      if (el >= hold) {
+    case BP_BITE:
+      if (el >= readHoldMs(s_bmsg)) {
         if (s_php <= 0) { startMelody(MEL_KO, ARRAY_COUNT(MEL_KO), now);
                           storyGoto(n.nextB); }        // knocked out
         else battlePhase(BP_CHOOSE);
       }
       break;
-    }
     case BP_MAULED:
-      if (el >= BATTLE_MSG_MS) { startMelody(MEL_KO, ARRAY_COUNT(MEL_KO), now);
-                                 storyGoto(n.nextB); }
+      if (el >= readHoldMs(s_bmsg)) { startMelody(MEL_KO, ARRAY_COUNT(MEL_KO), now);
+                                      storyGoto(n.nextB); }
       break;
     case BP_BREW_OK:
     case BP_BREW_BAD:
-      if (el >= BATTLE_MSG_MS) doBite();     // brewing consumed the turn
+      if (el >= readHoldMs(s_bmsg)) doBite();  // brewing consumed the turn
       break;
     case BP_CHOOSE:
       break;                                 // waiting on the player
