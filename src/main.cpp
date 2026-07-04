@@ -1805,12 +1805,56 @@ static void drawLuteNotes(int cx, int cy, uint32_t now) {
   }
 }
 
+// One flame tongue, scanned per ROW: left/right edges wander with layered
+// sine noise (licking hardest near the tip), the whole tongue sways, and its
+// height flickers — an organic outline, not geometry. Carve/inner layers
+// pass the parent's swaySeed so they stay nested. Returns the tip's virtual
+// y (pre-pan coordinates; caller subtracts cam).
+static int drawFlameLayer(int cam, uint32_t now, int cx0, int baseVy,
+                          int height, int maxW, float seed, uint8_t color,
+                          float swaySeed) {
+  int flick = (int)lroundf(4.0f * sinf((float)now * 0.009f + seed) +
+                           3.0f * sinf((float)now * 0.023f + seed * 2.3f));
+  int tipVy = baseVy - height - flick;
+  oled.setDrawColor(color);
+  for (int vy = tipVy; vy <= baseVy; vy++) {
+    int y = vy - cam;
+    if (y < 0 || y >= 64) continue;
+    float h = (float)(vy - tipVy) / (float)(baseVy - tipVy);
+    float half = (float)maxW * sqrtf(h);           // pointed tip, broad body
+    float sway = (1.0f - h) * (1.0f - h) * 5.0f * sinf((float)now * 0.0017f + swaySeed);
+    float lick = (1.0f - h) * 4.0f + 1.0f;
+    float fx = (float)cx0 + sway;
+    float eL = fx - half + lick * sinf((float)vy * 0.23f + (float)now * 0.011f + seed);
+    float eR = fx + half + lick * sinf((float)vy * 0.29f + (float)now * 0.013f + seed * 1.7f);
+    if (eR > eL)
+      oled.drawHLine((u8g2_uint_t)lroundf(eL), (u8g2_uint_t)y,
+                     (u8g2_uint_t)(lroundf(eR - eL) + 1));
+  }
+  oled.setDrawColor(1);
+  return tipVy;
+}
+
+// A thick log: filled rotated slab with round ends.
+static void drawLog(int cam, int x0, int y0, int x1, int y1, int half) {
+  float dx = (float)(x1 - x0), dy = (float)(y1 - y0);
+  float ln = sqrtf(dx * dx + dy * dy);
+  int px = (int)lroundf(-dy / ln * (float)half);
+  int py = (int)lroundf(dx / ln * (float)half);
+  oled.drawTriangle(x0 + px, y0 + py - cam, x1 + px, y1 + py - cam,
+                    x1 - px, y1 - py - cam);
+  oled.drawTriangle(x0 + px, y0 + py - cam, x1 - px, y1 - py - cam,
+                    x0 - px, y0 - py - cam);
+  oled.drawDisc(x0, y0 - cam, half);
+  oled.drawDisc(x1, y1 - cam, half);
+}
+
 // Campfire scene (N_SCENE), framed CLOSE like a pinball cutaway — the fire
 // fills the frame rather than sitting neatly inside it. The camera pans down
 // a 200px virtual scene: sinuous smoke wisps first, then flames rising into
 // frame, landing with the blaze near full-height and the crossed logs
 // cropped by the bottom edge. (Even at an inn, it's always a campfire.)
-// Twin: fire2_sketch.py via tools/oledsim.py. Node entry stamped g_stateMs.
+// Twin: fire3_sketch.py via tools/oledsim.py. Node entry stamped g_stateMs.
 static void drawCampfire(int cx, int cy, uint32_t now) {
   (void)cx; (void)cy;                              // full-screen scene
   uint32_t el = now - g_stateMs;
@@ -1835,38 +1879,48 @@ static void drawCampfire(int cx, int cy, uint32_t now) {
     }
   }
 
-  // flames: near full-frame in the final view, layered — outer blaze, side
-  // tongues, dark core, bright heart (base at vy 191)
-  float f1 = sinf((float)now * 0.013f);
-  float f2 = sinf((float)now * 0.021f + 1.7f);
-  float f3 = sinf((float)now * 0.017f + 4.0f);
-  int base = 191 - cam;
-  oled.drawTriangle(64 - 26 - (int)lroundf(3 * f3), base,
-                    64 + (int)lroundf(5 * f2), 141 + (int)lroundf(6 * f1) - cam,
-                    64 + 26 + (int)lroundf(3 * f1), base);
-  oled.drawTriangle(64 - 40, base,
-                    64 - 30 + (int)lroundf(3 * f2), 166 + (int)lroundf(5 * f3) - cam,
-                    64 - 14, base);
-  oled.drawTriangle(64 + 14, base,
-                    64 + 30 + (int)lroundf(3 * f1), 169 + (int)lroundf(5 * f2) - cam,
-                    64 + 40, base);
-  oled.setDrawColor(0);
-  oled.drawTriangle(64 - 12, base,
-                    64 + (int)lroundf(4 * f3), 160 + (int)lroundf(5 * f2) - cam,
-                    64 + 12, base);
-  oled.setDrawColor(1);
-  oled.drawTriangle(64 - 6, base,
-                    64 + (int)lroundf(2 * f1), 176 + (int)lroundf(4 * f3) - cam,
-                    64 + 6, base);
+  // flames: an organic silhouette, scanned per row — main blaze plus two
+  // side tongues merge into one many-peaked outline whose edges lick
+  drawFlameLayer(cam, now, 46, 193, 24, 14, 4.0f, 1, 4.0f);   // left tongue
+  drawFlameLayer(cam, now, 82, 193, 20, 13, 8.5f, 1, 8.5f);   // right tongue
+  int tip = drawFlameLayer(cam, now, 64, 193, 50, 30, 1.0f, 1, 1.0f);
 
-  // logs: thick crossed diagonals running past the frame edges, cropped by
-  // the bottom (all y stay positive, so raw lines are wrap-safe here)
-  for (int o = 0; o < 5; o++) {
-    oled.drawLine(6, 199 - o - cam, 74, 187 - o - cam);
-    oled.drawLine(54, 187 + o - cam, 122, 199 + o - cam);
+  // tongue separations: thin black wavy trails INSIDE the silhouette (a
+  // carved core reads as a donut once the logs close its bottom edge)
+  oled.setDrawColor(0);
+  for (int i = 0; i < 2; i++) {
+    int x0 = 56 + i * 15;
+    int top = 166 - (int)lroundf(5.0f * sinf((float)now * 0.006f + i * 2.2f));
+    for (int vy = top; vy < 192; vy++) {
+      int y = vy - cam;
+      if (y < 0 || y >= 64) continue;
+      int x = x0 + (int)lroundf(3.0f * sinf((float)vy * 0.3f + (float)now * 0.008f + i * 2.0f));
+      oled.drawPixel(x, y);
+      oled.drawPixel(x + 1, y);
+    }
   }
-  oled.drawCircle(10, 196 - cam, 3);               // cut ends
-  oled.drawCircle(118, 197 - cam, 3);
+  oled.setDrawColor(1);
+
+  // a detached lick above the tip, sometimes
+  if (sinf((float)now * 0.007f + 1.0f) > 0.45f) {
+    int lx = 64 + (int)lroundf(5.0f * sinf((float)now * 0.0017f + 1.0f));
+    int ly = tip - 5 - cam;
+    if (ly >= 2) oled.drawDisc(lx, ly, 2);
+  }
+
+  // logs: two thick crossed slabs with round ends, end-grain rings and
+  // dashed bark, cropped by the bottom edge of the frame
+  drawLog(cam, 12, 195, 72, 186, 5);
+  drawLog(cam, 56, 186, 116, 196, 5);
+  oled.setDrawColor(0);
+  oled.drawCircle(12, 195 - cam, 2);
+  oled.drawCircle(116, 196 - cam, 2);
+  for (int d = 0; d < 4; d++) {
+    int x = 22 + d * 12;
+    oled.drawLine(x, 196 - d - cam, x + 6, 195 - d - cam);
+    oled.drawLine(x + 46, 188 + d - cam, x + 52, 189 + d - cam);
+  }
+  oled.setDrawColor(1);
 
   // embers drifting up around the blaze
   for (int i = 0; i < 6; i++) {

@@ -359,13 +359,45 @@ def choice_scene(s, now, prompt, opt, gold, php=30):
     choice_line(s, opt)
 
 
+def flame_layer(s, now, cam, cx0, base_vy, height, max_w, seed, color, sway_seed):
+    flick = lroundf(4.0 * math.sin(now * 0.009 + seed) +
+                    3.0 * math.sin(now * 0.023 + seed * 2.3))
+    tip_vy = base_vy - height - flick
+    s.set_draw_color(color)
+    for vy in range(tip_vy, base_vy + 1):
+        y = vy - cam
+        if not (0 <= y < 64):
+            continue
+        h = (vy - tip_vy) / max(1, base_vy - tip_vy)
+        half = max_w * math.sqrt(h)
+        sway = (1 - h) * (1 - h) * 5.0 * math.sin(now * 0.0017 + sway_seed)
+        lick = (1 - h) * 4.0 + 1.0
+        fx = cx0 + sway
+        eL = fx - half + lick * math.sin(vy * 0.23 + now * 0.011 + seed)
+        eR = fx + half + lick * math.sin(vy * 0.29 + now * 0.013 + seed * 1.7)
+        if eR > eL:
+            s.draw_hline(lroundf(eL), y, lroundf(eR - eL) + 1)
+    s.set_draw_color(1)
+    return tip_vy
+
+
+def log_slab(s, cam, x0, y0, x1, y1, half):
+    dx, dy = x1 - x0, y1 - y0
+    ln = math.hypot(dx, dy)
+    px, py = lroundf(-dy / ln * half), lroundf(dx / ln * half)
+    s.draw_triangle(x0 + px, y0 + py - cam, x1 + px, y1 + py - cam, x1 - px, y1 - py - cam)
+    s.draw_triangle(x0 + px, y0 + py - cam, x1 - px, y1 - py - cam, x0 - px, y0 - py - cam)
+    s.draw_disc(x0, y0 - cam, half)
+    s.draw_disc(x1, y1 - cam, half)
+
+
 def campfire(s, el):
-    # v2 close-framed fire (twin of drawCampfire; see scratch fire2_sketch.py)
+    # v3 organic fire (twin of drawCampfire; see scratch fire3_sketch.py)
     now = el
     t = min(1.0, el / 3500.0)
     e = t * t * (3 - 2 * t)
     cam = lroundf(e * 136.0)
-    for i in range(4):
+    for i in range(4):                      # smoke wisps
         rise = (now // 18 + i * 47) % 120
         head = 148 - rise
         xc = 52 + i * 10
@@ -376,26 +408,39 @@ def campfire(s, el):
             amp = 2.0 + (36 - d) * 0.16
             x = xc + lroundf(amp * math.sin((head + d) * 0.17 + now * 0.002 + i * 1.7))
             s.draw_pixel(x, y); s.draw_pixel(x + 1, y)
-    f1, f2, f3 = (math.sin(now * k + p) for k, p in ((0.013, 0), (0.021, 1.7), (0.017, 4.0)))
-    base = 191 - cam
-    s.draw_triangle(64 - 26 - lroundf(3 * f3), base, 64 + lroundf(5 * f2),
-                    141 + lroundf(6 * f1) - cam, 64 + 26 + lroundf(3 * f1), base)
-    s.draw_triangle(64 - 40, base, 64 - 30 + lroundf(3 * f2), 166 + lroundf(5 * f3) - cam, 64 - 14, base)
-    s.draw_triangle(64 + 14, base, 64 + 30 + lroundf(3 * f1), 169 + lroundf(5 * f2) - cam, 64 + 40, base)
-    s.set_draw_color(0)
-    s.draw_triangle(64 - 12, base, 64 + lroundf(4 * f3), 160 + lroundf(5 * f2) - cam, 64 + 12, base)
+    flame_layer(s, now, cam, 46, 193, 24, 14, 4.0, 1, 4.0)
+    flame_layer(s, now, cam, 82, 193, 20, 13, 8.5, 1, 8.5)
+    tip = flame_layer(s, now, cam, 64, 193, 50, 30, 1.0, 1, 1.0)
+    s.set_draw_color(0)                     # tongue separations
+    for i in range(2):
+        x0 = 56 + i * 15
+        top = 166 - lroundf(5 * math.sin(now * 0.006 + i * 2.2))
+        for vy in range(top, 192):
+            y = vy - cam
+            if not (0 <= y < 64):
+                continue
+            x = x0 + lroundf(3.0 * math.sin(vy * 0.3 + now * 0.008 + i * 2.0))
+            s.draw_pixel(x, y); s.draw_pixel(x + 1, y)
     s.set_draw_color(1)
-    s.draw_triangle(64 - 6, base, 64 + lroundf(2 * f1), 176 + lroundf(4 * f3) - cam, 64 + 6, base)
-    for o in range(5):
-        s.draw_line(6, 199 - o - cam, 74, 187 - o - cam)
-        s.draw_line(54, 187 + o - cam, 122, 199 + o - cam)
-    s.draw_circle(10, 196 - cam, 3)
-    s.draw_circle(118, 197 - cam, 3)
-    for i in range(6):
+    if math.sin(now * 0.007 + 1.0) > 0.45:  # detached lick
+        lx = 64 + lroundf(5.0 * math.sin(now * 0.0017 + 1.0))
+        if tip - 5 - cam >= 2:
+            s.draw_disc(lx, tip - 5 - cam, 2)
+    log_slab(s, cam, 12, 195, 72, 186, 5)
+    log_slab(s, cam, 56, 186, 116, 196, 5)
+    s.set_draw_color(0)
+    s.draw_circle(12, 195 - cam, 2)
+    s.draw_circle(116, 196 - cam, 2)
+    for d in range(4):
+        x = 22 + d * 12
+        s.draw_line(x, 196 - d - cam, x + 6, 195 - d - cam)
+        s.draw_line(x + 46, 188 + d - cam, x + 52, 189 + d - cam)
+    s.set_draw_color(1)
+    for i in range(6):                      # embers
         ph = (now // 90 + i * 31) % 60
         if ph < 34:
             ex = 26 + (i * 19) % 76 + lroundf(2 * math.sin(now * 0.004 + i))
-            ey = 186 - ph - cam
+            ey = 184 - ph - cam
             s.draw_pixel(ex, ey)
             if ph < 16:
                 s.draw_pixel(ex + 1, ey)
