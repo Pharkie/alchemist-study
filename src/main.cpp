@@ -295,7 +295,7 @@ static const StoryNode kStorySkyrim[] = {
                   "The innkeep eyes your purse. A hot meal or a drink?",
                   nullptr, nullptr, 8, 0, 0, 0, 0, 0, 0, nullptr, nullptr },
   /*8 buy    */ { N_CHOICE, "Spend your coin on...", nullptr,
-                  "Mead: 3gp +10HP", "Sweetroll: 5gp +15HP",   // one line each
+                  "Nord mead: -3gp, +10HP", "Sweetroll: -5gp, +15HP",
                   9, 10, 0, 0, 3, 5, 0, nullptr, nullptr },
   /*9 mead   */ { N_CARD, "Nord Mead",
                   "It warms you to the toes.",
@@ -396,12 +396,13 @@ static const Note MEL_DICE_FANFARE[] = { {659, 80}, {784, 80}, {988, 80}, {1319,
 static const Note MEL_BITE[] = { {170, 90}, {120, 140} };
 static const Note MEL_CRIT[] = { {200, 90}, {150, 90}, {100, 220} };
 static const Note MEL_KO[]   = { {392, 160}, {330, 160}, {262, 160}, {196, 320} };
-// A silly tavern jig for the lute (looped while the N_TUNE node is up).
+// The lute: a slow, melancholy folk air in the Dorian mode (looped while the
+// N_TUNE node is up) — firelight music, not a jig.
 static const Note MEL_LUTE[] = {
-  {440, 160}, {523, 160}, {659, 160}, {880, 320}, {784, 160}, {659, 160}, {523, 320},
-  {587, 160}, {698, 160}, {587, 160}, {523, 160}, {440, 320}, {0, 160},
-  {440, 160}, {523, 160}, {659, 160}, {784, 160}, {880, 320}, {1047, 160}, {880, 160},
-  {659, 320}, {587, 160}, {523, 160}, {494, 160}, {523, 320}, {0, 400},
+  {330, 400}, {392, 400}, {440, 650}, {392, 400}, {440, 400}, {523, 650},
+  {494, 400}, {440, 850}, {0, 250},
+  {523, 400}, {587, 400}, {659, 650}, {587, 400}, {523, 400}, {440, 650},
+  {392, 400}, {330, 400}, {440, 1100}, {0, 500},
 };
 
 static const Note* s_melody     = nullptr;
@@ -1789,79 +1790,92 @@ static void drawJarl(int cx, int cy, uint32_t now) {
   oled.setDrawColor(1);
 }
 
-// Quavers drifting upward on a sway — the lute is heard, not seen.
+// Quavers drifting upward on a sway — the lute is heard, not seen. Stems and
+// flags go through drawLineClipped: as a note rises off-screen its stem top
+// goes negative, and raw u8g2 lines would wrap and smear (the vertical
+// cousin of the dice-roll streak bug).
 static void drawLuteNotes(int cx, int cy, uint32_t now) {
   for (int i = 0; i < 3; i++) {
-    int rise = (int)((now / 30 + i * 27) % 40);
-    int x = cx - 30 + i * 30 + (int)lroundf(4.0f * sinf((float)now * 0.003f + i * 2.0f));
+    int rise = (int)((now / 45 + i * 27) % 40);    // unhurried, like the tune
+    int x = cx - 30 + i * 30 + (int)lroundf(4.0f * sinf((float)now * 0.002f + i * 2.0f));
     int y = cy + 14 - rise;
-    oled.drawDisc(x, y, 2);                        // note head
-    oled.drawVLine(x + 2, y - 8, 8);               // stem
-    oled.drawLine(x + 2, y - 8, x + 5, y - 5);     // flag
+    oled.drawDisc(x, y, 2);                        // note head (per-pixel safe)
+    drawLineClipped(x + 2, y - 8, x + 2, y);       // stem
+    drawLineClipped(x + 2, y - 8, x + 5, y - 5);   // flag
   }
 }
 
-// Campfire scene (N_SCENE): the camera pans down a 130px virtual scene —
-// drifting smoke, then flickering flames, then the crossed logs — and holds
-// on the crackling fire. (Even at an inn, it's always a campfire.)
-// Twin: fire_sketch.py via tools/oledsim.py. Node entry stamped g_stateMs.
+// Campfire scene (N_SCENE), framed CLOSE like a pinball cutaway — the fire
+// fills the frame rather than sitting neatly inside it. The camera pans down
+// a 200px virtual scene: sinuous smoke wisps first, then flames rising into
+// frame, landing with the blaze near full-height and the crossed logs
+// cropped by the bottom edge. (Even at an inn, it's always a campfire.)
+// Twin: fire2_sketch.py via tools/oledsim.py. Node entry stamped g_stateMs.
 static void drawCampfire(int cx, int cy, uint32_t now) {
   (void)cx; (void)cy;                              // full-screen scene
   uint32_t el = now - g_stateMs;
   float t = (el >= 3500) ? 1.0f : (float)el / 3500.0f;
   float e = t * t * (3.0f - 2.0f * t);             // smoothstep pan
-  int cam = (int)lroundf(e * 70.0f);               // viewport top in the scene
+  int cam = (int)lroundf(e * 136.0f);              // viewport top in the scene
 
-  // smoke: a loose column rising from over the flames, swelling as it climbs
-  for (int i = 0; i < 6; i++) {
-    int rise = (int)((now / 22 + i * 41) % 100);
-    int vy = 92 - rise;
-    int x = 64 + (int)lroundf((3.0f + (float)rise * 0.09f) *
-                              sinf((float)now * 0.0012f + i * 2.1f + (float)rise * 0.05f));
-    int y = vy - cam;
-    if (y > -8 && y < 72) oled.drawCircle(x, y, 1 + rise / 26);
+  // smoke: S-shaped wisps (pixel trails, no closed shapes), widening as they
+  // rise; during the hold their tails still lick the top of the frame
+  for (int i = 0; i < 4; i++) {
+    int rise = (int)((now / 18 + i * 47) % 120);
+    int head = 148 - rise;
+    int xc = 52 + i * 10;
+    for (int d = 0; d < 36; d++) {
+      int y = head + d - cam;
+      if (y < 0 || y >= 64) continue;
+      float amp = 2.0f + (float)(36 - d) * 0.16f;  // older smoke wanders wider
+      int x = xc + (int)lroundf(amp * sinf((float)(head + d) * 0.17f +
+                                           (float)now * 0.002f + i * 1.7f));
+      oled.drawPixel(x, y);
+      oled.drawPixel(x + 1, y);
+    }
   }
 
-  // flames: layered flickering triangles over the log pile (base at vy 116)
+  // flames: near full-frame in the final view, layered — outer blaze, side
+  // tongues, dark core, bright heart (base at vy 191)
   float f1 = sinf((float)now * 0.013f);
   float f2 = sinf((float)now * 0.021f + 1.7f);
   float f3 = sinf((float)now * 0.017f + 4.0f);
-  int base = 116 - cam;
-  oled.drawTriangle(64 - 13 - (int)lroundf(2 * f3), base,
-                    64 + (int)lroundf(3 * f2), 84 + (int)lroundf(4 * f1) - cam,
-                    64 + 13 + (int)lroundf(2 * f1), base);
-  oled.drawTriangle(64 - 20, base,
-                    64 - 16 + (int)lroundf(2 * f2), 100 + (int)lroundf(3 * f3) - cam,
-                    64 - 8, base);
-  oled.drawTriangle(64 + 8, base,
-                    64 + 16 + (int)lroundf(2 * f1), 102 + (int)lroundf(3 * f2) - cam,
-                    64 + 20, base);
-  oled.setDrawColor(0);                            // dark core...
+  int base = 191 - cam;
+  oled.drawTriangle(64 - 26 - (int)lroundf(3 * f3), base,
+                    64 + (int)lroundf(5 * f2), 141 + (int)lroundf(6 * f1) - cam,
+                    64 + 26 + (int)lroundf(3 * f1), base);
+  oled.drawTriangle(64 - 40, base,
+                    64 - 30 + (int)lroundf(3 * f2), 166 + (int)lroundf(5 * f3) - cam,
+                    64 - 14, base);
+  oled.drawTriangle(64 + 14, base,
+                    64 + 30 + (int)lroundf(3 * f1), 169 + (int)lroundf(5 * f2) - cam,
+                    64 + 40, base);
+  oled.setDrawColor(0);
+  oled.drawTriangle(64 - 12, base,
+                    64 + (int)lroundf(4 * f3), 160 + (int)lroundf(5 * f2) - cam,
+                    64 + 12, base);
+  oled.setDrawColor(1);
   oled.drawTriangle(64 - 6, base,
-                    64 + (int)lroundf(2 * f3), 96 + (int)lroundf(3 * f2) - cam,
+                    64 + (int)lroundf(2 * f1), 176 + (int)lroundf(4 * f3) - cam,
                     64 + 6, base);
-  oled.setDrawColor(1);                            // ...with a bright heart
-  oled.drawTriangle(64 - 3, base,
-                    64 + (int)lroundf(1 * f1), 106 + (int)lroundf(2 * f3) - cam,
-                    64 + 3, base);
 
-  // logs: crossed diagonals + a base log, cut ends, ground line
-  for (int o = 0; o < 3; o++) {
-    oled.drawLine(38, 124 - o - cam, 78, 114 - o - cam);
-    oled.drawLine(50, 114 + o - cam, 90, 124 + o - cam);
+  // logs: thick crossed diagonals running past the frame edges, cropped by
+  // the bottom (all y stay positive, so raw lines are wrap-safe here)
+  for (int o = 0; o < 5; o++) {
+    oled.drawLine(6, 199 - o - cam, 74, 187 - o - cam);
+    oled.drawLine(54, 187 + o - cam, 122, 199 + o - cam);
   }
-  oled.drawBox(44, 124 - cam, 40, 3);
-  oled.drawCircle(36, 123 - cam, 2);
-  oled.drawCircle(92, 124 - cam, 2);
-  oled.drawHLine(20, 128 - cam, 88);
+  oled.drawCircle(10, 196 - cam, 3);               // cut ends
+  oled.drawCircle(118, 197 - cam, 3);
 
-  // embers popping just outside the flames
-  for (int i = 0; i < 5; i++) {
-    if (((now / 110) + i) % 3 == 0) {
-      int ex = 40 + (i * 23) % 52;
-      int ey = 108 - (int)((i * 7 + now / 300) % 14) - cam;
+  // embers drifting up around the blaze
+  for (int i = 0; i < 6; i++) {
+    int ph = (int)((now / 90 + i * 31) % 60);
+    if (ph < 34) {
+      int ex = 26 + (i * 19) % 76 + (int)lroundf(2.0f * sinf((float)now * 0.004f + i));
+      int ey = 186 - ph - cam;
       oled.drawPixel(ex, ey);
-      oled.drawPixel(ex + 1, ey);
+      if (ph < 16) oled.drawPixel(ex + 1, ey);
     }
   }
 }
@@ -2044,13 +2058,15 @@ static void renderStory(uint32_t now) {
       renderStorySpeak(n, now);
       break;
     case N_CHOICE: {
-      drawTwinkles(now);
-      oled.setFont(u8g2_font_helvB08_tr);
-      drawCenteredF(n.title, 20);
+      // Decision HUD: your HP bar (so "+15 HP" means something) and the
+      // purse, then the prompt and the spinner.
+      drawHPBar(2, 0, "You", s_phpShown, PLAYER_MAX_HP);
       char purse[10];                        // the inventory, such as it is
       snprintf(purse, sizeof(purse), "%d gp", s_gold);
       oled.setFont(u8g2_font_5x8_tr);
-      oled.drawStr(126 - oled.getStrWidth(purse), 8, purse);
+      oled.drawStr(126 - oled.getStrWidth(purse), 19, purse);
+      oled.setFont(u8g2_font_helvB08_tr);
+      drawCenteredF(n.title, 32);
       drawChoiceLine(s_choiceIdx == 0 ? n.optA : n.optB);
       break;
     }

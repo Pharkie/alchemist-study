@@ -349,46 +349,56 @@ def home(s, now, panel_names, scroll, sel):
     s.draw_line(124, 28, 126, 31); s.draw_line(126, 31, 124, 34)
 
 
-def choice_scene(s, now, prompt, opt, gold):
-    twinkles(s, now)
-    s.set_font("helvB08")
-    s.draw_centered(prompt, 20)
+def choice_scene(s, now, prompt, opt, gold, php=30):
+    hp_bar(s, 2, 0, "You", php, PLAYER_MAX_HP)
     s.set_font("5x8")
     p = f"{gold} gp"
-    s.draw_str(126 - s.get_str_width(p), 8, p)
+    s.draw_str(126 - s.get_str_width(p), 19, p)
+    s.set_font("helvB08")
+    s.draw_centered(prompt, 32)
     choice_line(s, opt)
 
 
 def campfire(s, el):
-    # trimmed copy of the fire sketch (see scratch fire_sketch.py)
+    # v2 close-framed fire (twin of drawCampfire; see scratch fire2_sketch.py)
+    now = el
     t = min(1.0, el / 3500.0)
     e = t * t * (3 - 2 * t)
-    cam = lroundf(e * 70.0)
-    now = el
-    for i in range(6):
-        rise = (now // 22 + i * 41) % 100
-        vy = 92 - rise
-        x = 64 + lroundf((3 + rise * 0.09) * math.sin(now * 0.0012 + i * 2.1 + rise * 0.05))
-        y = vy - cam
-        if -8 < y < 72:
-            s.draw_circle(x, y, 1 + rise // 26)
+    cam = lroundf(e * 136.0)
+    for i in range(4):
+        rise = (now // 18 + i * 47) % 120
+        head = 148 - rise
+        xc = 52 + i * 10
+        for d in range(36):
+            y = head + d - cam
+            if not (0 <= y < 64):
+                continue
+            amp = 2.0 + (36 - d) * 0.16
+            x = xc + lroundf(amp * math.sin((head + d) * 0.17 + now * 0.002 + i * 1.7))
+            s.draw_pixel(x, y); s.draw_pixel(x + 1, y)
     f1, f2, f3 = (math.sin(now * k + p) for k, p in ((0.013, 0), (0.021, 1.7), (0.017, 4.0)))
-    base = 116 - cam
-    s.draw_triangle(64 - 13 - lroundf(2 * f3), base, 64 + lroundf(3 * f2),
-                    84 + lroundf(4 * f1) - cam, 64 + 13 + lroundf(2 * f1), base)
-    s.draw_triangle(64 - 20, base, 64 - 16 + lroundf(2 * f2), 100 + lroundf(3 * f3) - cam, 64 - 8, base)
-    s.draw_triangle(64 + 8, base, 64 + 16 + lroundf(2 * f1), 102 + lroundf(3 * f2) - cam, 64 + 20, base)
+    base = 191 - cam
+    s.draw_triangle(64 - 26 - lroundf(3 * f3), base, 64 + lroundf(5 * f2),
+                    141 + lroundf(6 * f1) - cam, 64 + 26 + lroundf(3 * f1), base)
+    s.draw_triangle(64 - 40, base, 64 - 30 + lroundf(3 * f2), 166 + lroundf(5 * f3) - cam, 64 - 14, base)
+    s.draw_triangle(64 + 14, base, 64 + 30 + lroundf(3 * f1), 169 + lroundf(5 * f2) - cam, 64 + 40, base)
     s.set_draw_color(0)
-    s.draw_triangle(64 - 6, base, 64 + lroundf(2 * f3), 96 + lroundf(3 * f2) - cam, 64 + 6, base)
+    s.draw_triangle(64 - 12, base, 64 + lroundf(4 * f3), 160 + lroundf(5 * f2) - cam, 64 + 12, base)
     s.set_draw_color(1)
-    s.draw_triangle(64 - 3, base, 64 + lroundf(1 * f1), 106 + lroundf(2 * f3) - cam, 64 + 3, base)
-    for o in range(3):
-        s.draw_line(38, 124 - o - cam, 78, 114 - o - cam)
-        s.draw_line(50, 114 + o - cam, 90, 124 + o - cam)
-    s.draw_box(44, 124 - cam, 40, 3)
-    s.draw_circle(36, 123 - cam, 2)
-    s.draw_circle(92, 124 - cam, 2)
-    s.draw_hline(20, 128 - cam, 88)
+    s.draw_triangle(64 - 6, base, 64 + lroundf(2 * f1), 176 + lroundf(4 * f3) - cam, 64 + 6, base)
+    for o in range(5):
+        s.draw_line(6, 199 - o - cam, 74, 187 - o - cam)
+        s.draw_line(54, 187 + o - cam, 122, 199 + o - cam)
+    s.draw_circle(10, 196 - cam, 3)
+    s.draw_circle(118, 197 - cam, 3)
+    for i in range(6):
+        ph = (now // 90 + i * 31) % 60
+        if ph < 34:
+            ex = 26 + (i * 19) % 76 + lroundf(2 * math.sin(now * 0.004 + i))
+            ey = 186 - ph - cam
+            s.draw_pixel(ex, ey)
+            if ph < 16:
+                s.draw_pixel(ex + 1, ey)
 
 
 def build():
@@ -424,7 +434,7 @@ def build():
     shot(lambda s: story_card(s, "The Bannered Mare",
                               "The innkeep eyes your purse. A hot meal or a drink?", 100))
     shot(lambda s: choice_scene(s, now, "Spend your coin on...",
-                                "Sweetroll: 5 gp (+15 HP)", 7))
+                                "Sweetroll: -5gp, +15HP", 7, php=16))
     shot(lambda s: story_card(s, "Sweetroll",
                               "Sweet as victory - and no thief in sight.", 100,
                               show_hp=True, php=26))
