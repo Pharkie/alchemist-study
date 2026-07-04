@@ -187,7 +187,7 @@ static uint8_t s_questRoll = 14;
 // attacks' max damage (2 x 7 = 14) so the crit lands before the enemy can
 // die, and stay low enough that honest post-heal rolls finish within a turn
 // or two.
-enum NodeKind { N_CARD, N_SPEAK, N_CHOICE, N_BATTLE, N_END };
+enum NodeKind { N_CARD, N_SPEAK, N_CHOICE, N_TUNE, N_SCENE, N_BATTLE, N_END };
 
 struct BattleDef {
   const char* name;       // HP bar label
@@ -204,14 +204,17 @@ struct BattleDef {
 
 struct StoryNode {
   NodeKind    kind;
-  const char* title;      // card title / choice prompt / N_SPEAK speaker name
+  const char* title;      // card title / choice prompt / N_SPEAK speaker / N_TUNE caption
   const char* body;       // card body / speech (fit: ~22 chars/line, max 4 lines)
   const char* optA, *optB;   // choice options (bottom spinner; wraps to 2 lines)
-  uint8_t     nextA;      // card/speak press / choice A / battle WIN
+  uint8_t     nextA;      // card/speak/tune press / choice A / battle WIN / scene end
   uint8_t     nextB;      // choice B / battle KO
   uint8_t     setFlag;    // N_CHOICE: flag bits set by choosing option B
-  int8_t      healA, healB;  // N_CHOICE: HP restored by each option
-  void (*art)(int cx, int cy, uint32_t now);  // N_SPEAK: portrait bust
+  int8_t      heal;       // HP restored on ENTERING this node (99 = to full);
+                          // a card that heals also shows the animated HP bar
+  int8_t      costA, costB;  // N_CHOICE: gold cost per option (refused if broke)
+  uint16_t    ms;         // N_SCENE: play this long, then auto-advance
+  void (*art)(int cx, int cy, uint32_t now);  // N_SPEAK portrait / N_TUNE / N_SCENE
   const BattleDef* battle;   // N_BATTLE
 };
 
@@ -224,14 +227,17 @@ static const BattleDef* s_bdef = nullptr;   // active battle definition
 static BattlePhase s_bp    = BP_INTRO;
 static bool     s_storyBrew = false;  // brewing inside the story (real IDENTIFY/STIRRING)
 static bool     s_numb      = false;  // post-crit: attacking is fatal, must brew
+static bool     s_healed    = false;  // brewed successfully THIS battle (skips the crit)
 static int      s_choiceIdx = 0;      // option showing on the choice spinner
 static int      s_php = 0, s_ehp = 0; // battle hit points (player / enemy)
+static int      s_gold = 0;           // the purse — inventory system v0 (gold only)
 static int      s_biteN = 0;          // enemy bites landed (CRIT_ON_BITE'th = the crit)
 static char     s_bmsg[64] = "";      // battle message line
 static Universe s_prevUniverse = UNI_SKYRIM;   // restored when the story ends
-static constexpr int PLAYER_MAX_HP = 30;
-static constexpr int CRIT_ON_BITE  = 2;   // this bite is always the crit...
-static constexpr int CRIT_HP       = 6;   // ...and it leaves the player here
+static constexpr int PLAYER_MAX_HP   = 30;
+static constexpr int STORY_START_GOLD = 7;
+static constexpr int CRIT_ON_BITE  = 2;   // this bite is the crit (unless already
+static constexpr int CRIT_HP       = 6;   // brewed) and leaves the player here
 static constexpr uint32_t BATTLE_MSG_MS  = 1500;  // how long each message beat holds
 // The attack roll is a full-screen pinball cutaway: tumble in -> zoom onto
 // the face -> hold the landed number, then the damage resolves.
@@ -243,10 +249,13 @@ static float s_phpShown = 0.0f, s_ehpShown = 0.0f; // animated bar values
 
 // --- Skyrim Act 1 script. More acts append nodes; other universes get their
 // own tables (storyBegin picks). Everything story-specific lives HERE.
-// Act 1's three beats: the road/Jarl choice -> the rat battle (forced healing
-// brew) -> the inn (spend your last coin, rest, tease act 2).
-static void drawRat(int cx, int cy, uint32_t now);    // sprites, defined with
-static void drawJarl(int cx, int cy, uint32_t now);   // the rest of the art
+// Act 1's beats: the road/Jarl choice -> the rat battle (forced healing
+// brew) -> the inn (spend coin on mead or a sweetroll, then play the lute
+// and/or sleep by the fire) -> act 2 tease.
+static void drawRat(int cx, int cy, uint32_t now);      // sprites & scenes,
+static void drawJarl(int cx, int cy, uint32_t now);     // defined with the
+static void drawLuteNotes(int cx, int cy, uint32_t now);// rest of the art
+static void drawCampfire(int cx, int cy, uint32_t now);
 
 enum { SF_JARL = 0x01 };   // saw the Jarl: hint earned, but ambushed at dusk
 
@@ -260,45 +269,53 @@ static const BattleDef kBtRat = {
 };
 
 // Node fields: kind, title, body, optA, optB, nextA, nextB, setFlag,
-//              healA, healB, art, battle
+//              heal, costA, costB, ms, art, battle
 static const StoryNode kStorySkyrim[] = {
   /*0 intro  */ { N_CARD, "The Alchemist's Quest",
                   "The Jarl of Whiterun requests your help.",
-                  nullptr, nullptr, 1, 0, 0, 0, 0, nullptr, nullptr },
+                  nullptr, nullptr, 1, 0, 0, 0, 0, 0, 0, nullptr, nullptr },
   /*1 choice */ { N_CHOICE, "How do you begin?", nullptr,
                   "Take the road", "Request audience with Jarl",
-                  2, 3, SF_JARL, 0, 0, nullptr, nullptr },
+                  2, 3, SF_JARL, 0, 0, 0, 0, nullptr, nullptr },
   /*2 road   */ { N_CARD, "The Road",
                   "You take the road. In the tall grass, something stirs...",
-                  nullptr, nullptr, 4, 0, 0, 0, 0, nullptr, nullptr },
+                  nullptr, nullptr, 4, 0, 0, 0, 0, 0, 0, nullptr, nullptr },
   /*3 jarl   */ { N_SPEAK, "Jarl Balgruuf",   // bubble fits ~15 chars x 4 lines
                   "Blue mountain flower mends flesh. Now go!",
-                  nullptr, nullptr, 4, 0, 0, 0, 0, drawJarl, nullptr },
+                  nullptr, nullptr, 4, 0, 0, 0, 0, 0, 0, drawJarl, nullptr },
   /*4 battle */ { N_BATTLE, nullptr, nullptr, nullptr, nullptr,
-                  5, 6, 0, 0, 0, nullptr, &kBtRat },
+                  5, 6, 0, 0, 0, 0, 0, nullptr, &kBtRat },
   /*5 won    */ { N_CARD, "Victory!",
                   "The rat lies slain. Whiterun's gates ahead - and a warm inn.",
-                  nullptr, nullptr, 7, 0, 0, 0, 0, nullptr, nullptr },
+                  nullptr, nullptr, 7, 0, 0, 0, 0, 0, 0, nullptr, nullptr },
   /*6 ko     */ { N_CARD, "Knocked Out",
                   "Darkness takes you... You wake by the roadside. Try again.",
-                  nullptr, nullptr, 4, 0, 0, 0, 0, nullptr, nullptr },  // back into the fight
+                  nullptr, nullptr, 4, 0, 0, 0, 0, 0, 0, nullptr, nullptr },
   /*7 inn    */ { N_CARD, "The Bannered Mare",
-                  "Your last 5 gold buys one comfort before you rest.",
-                  nullptr, nullptr, 8, 0, 0, 0, 0, nullptr, nullptr },
-  /*8 choice */ { N_CHOICE, "Your 5 gold buys...", nullptr,
-                  "Nord mead (+5 HP)", "A sweetroll (+7 HP)",
-                  9, 10, 0, 5, 7, nullptr, nullptr },
+                  "The innkeep eyes your purse. A hot meal or a drink?",
+                  nullptr, nullptr, 8, 0, 0, 0, 0, 0, 0, nullptr, nullptr },
+  /*8 buy    */ { N_CHOICE, "Spend your coin on...", nullptr,
+                  "Mead: 3gp +10HP", "Sweetroll: 5gp +15HP",   // one line each
+                  9, 10, 0, 0, 3, 5, 0, nullptr, nullptr },
   /*9 mead   */ { N_CARD, "Nord Mead",
-                  "It warms you to the toes. (+5 HP)",
-                  nullptr, nullptr, 11, 0, 0, 0, 0, nullptr, nullptr },
+                  "It warms you to the toes.",
+                  nullptr, nullptr, 11, 0, 0, 10, 0, 0, 0, nullptr, nullptr },
   /*10 sweet */ { N_CARD, "Sweetroll",
-                  "Sweet as victory - and no thief in sight. (+7 HP)",
-                  nullptr, nullptr, 11, 0, 0, 0, 0, nullptr, nullptr },
-  /*11 rest  */ { N_CARD, "Nightfall",
-                  "You sleep by the hearth. Act 2 awaits...",
-                  nullptr, nullptr, 12, 0, 0, 0, 0, nullptr, nullptr },
-  /*12 end   */ { N_END, nullptr, nullptr, nullptr, nullptr,
-                  0, 0, 0, 0, 0, nullptr, nullptr },
+                  "Sweet as victory - and no thief in sight.",
+                  nullptr, nullptr, 11, 0, 0, 15, 0, 0, 0, nullptr, nullptr },
+  /*11 rest  */ { N_CHOICE, "The fire burns low...", nullptr,
+                  "Play the lute", "Go to sleep",
+                  12, 13, 0, 0, 0, 0, 0, nullptr, nullptr },
+  /*12 lute  */ { N_TUNE, "You strum an old tune",   // loops until pressed
+                  nullptr, nullptr, nullptr, 11, 0, 0, 0, 0, 0, 0,
+                  drawLuteNotes, nullptr },
+  /*13 fire  */ { N_SCENE, nullptr, nullptr, nullptr, nullptr,   // pan + hold
+                  14, 0, 0, 0, 0, 0, 6500, drawCampfire, nullptr },
+  /*14 awake */ { N_CARD, "Act 2",
+                  "You awake refreshed, ready for adventure.",
+                  nullptr, nullptr, 15, 0, 0, 99, 0, 0, 0, nullptr, nullptr },
+  /*15 end   */ { N_END, nullptr, nullptr, nullptr, nullptr,
+                  0, 0, 0, 0, 0, 0, 0, nullptr, nullptr },
 };
 
 // reed debounce / latch
@@ -379,6 +396,13 @@ static const Note MEL_DICE_FANFARE[] = { {659, 80}, {784, 80}, {988, 80}, {1319,
 static const Note MEL_BITE[] = { {170, 90}, {120, 140} };
 static const Note MEL_CRIT[] = { {200, 90}, {150, 90}, {100, 220} };
 static const Note MEL_KO[]   = { {392, 160}, {330, 160}, {262, 160}, {196, 320} };
+// A silly tavern jig for the lute (looped while the N_TUNE node is up).
+static const Note MEL_LUTE[] = {
+  {440, 160}, {523, 160}, {659, 160}, {880, 320}, {784, 160}, {659, 160}, {523, 320},
+  {587, 160}, {698, 160}, {587, 160}, {523, 160}, {440, 320}, {0, 160},
+  {440, 160}, {523, 160}, {659, 160}, {784, 160}, {880, 320}, {1047, 160}, {880, 160},
+  {659, 320}, {587, 160}, {523, 160}, {494, 160}, {523, 320}, {0, 400},
+};
 
 static const Note* s_melody     = nullptr;
 static uint8_t      s_melodyLen = 0;
@@ -529,6 +553,7 @@ static void battleReset() {
   s_ehpShown = (float)s_ehp;
   s_biteN = 0;
   s_numb = false;
+  s_healed = false;
   snprintf(s_bmsg, sizeof(s_bmsg), "%s", s_bdef->intro);
   s_bp = BP_INTRO;
 }
@@ -543,11 +568,16 @@ static void storyEnd() {
 }
 
 // THE story-graph step: enter a node by index. Battles arm themselves from
-// their BattleDef; the end marker routes home. Everything else just shows.
+// their BattleDef; an entry heal applies (and its card shows the bar rising);
+// the end marker routes home. Everything else just shows.
 static void storyGoto(int idx) {
   s_node = idx;
   g_stateMs = g_now;
   const StoryNode& n = s_story[idx];
+  if (n.heal) {
+    s_php += n.heal;                       // 99 = "restore to full" in practice
+    if (s_php > PLAYER_MAX_HP) s_php = PLAYER_MAX_HP;
+  }
   if      (n.kind == N_BATTLE) { s_bdef = n.battle; battleReset(); }
   else if (n.kind == N_CHOICE) s_choiceIdx = 0;
   else if (n.kind == N_END)    storyEnd();
@@ -561,17 +591,24 @@ static void storyBegin() {
   s_prevUniverse = g_universe;
   g_universe = UNI_SKYRIM;
   s_flags = 0;
+  s_gold = STORY_START_GOLD;
+  s_php = PLAYER_MAX_HP;
+  s_phpShown = (float)s_php;
   s_storyBrew = false;
   s_story = kStorySkyrim;
   enterState(ST_STORY);
   storyGoto(0);
 }
 
-// The enemy's turn. Authored beat: the CRIT_ON_BITE'th bite is always the
-// crit that drops the player to CRIT_HP and numbs the sword arm.
+// The enemy's turn. Authored beat: the CRIT_ON_BITE'th bite is the crit that
+// drops the player to CRIT_HP and numbs the sword arm — UNLESS they already
+// brewed this battle. An early brewer has engaged the potion mechanic, so
+// they fight it out on attrition instead (worst-case all-minimum rolls still
+// win at 2 HP); without this the crit would land right after a spent heal
+// and the "forced brew" beat became a death sentence.
 static void doBite() {
   s_biteN++;
-  if (s_biteN == CRIT_ON_BITE) {
+  if (s_biteN == CRIT_ON_BITE && !s_healed) {
     s_php = CRIT_HP;
     s_numb = true;
     snprintf(s_bmsg, sizeof(s_bmsg), "CRIT! Festering bite! Your arm goes numb...");
@@ -612,6 +649,7 @@ static void storyBrewResolve() {
   if (ok) {
     s_php = PLAYER_MAX_HP;
     s_numb = false;
+    s_healed = true;                       // mechanic engaged: no scripted crit
     snprintf(s_bmsg, sizeof(s_bmsg), "The draught mends you! Strength returns.");
     startMelody(MEL_SUCCESS, ARRAY_COUNT(MEL_SUCCESS), g_now);
     battlePhase(BP_BREW_OK);
@@ -649,12 +687,21 @@ static void storyPress() {
     case N_SPEAK:
       storyGoto(n.nextA);
       break;
+    case N_TUNE:
+      s_melodyActive = false;                // stop strumming mid-bar
+      noTone(PIN_BUZZER);
+      storyGoto(n.nextA);
+      break;
+    case N_SCENE:
+      storyGoto(n.nextA);                    // impatient? skip the cinematic
+      break;
     case N_CHOICE: {
-      int heal = (s_choiceIdx == 1) ? n.healB : n.healA;   // e.g. inn fare
-      if (heal) {
-        s_php += heal;
-        if (s_php > PLAYER_MAX_HP) s_php = PLAYER_MAX_HP;
+      int cost = (s_choiceIdx == 1) ? n.costB : n.costA;
+      if (cost > s_gold) {                   // can't afford it: the "nope" buzz
+        startMelody(MEL_NOTREADY, ARRAY_COUNT(MEL_NOTREADY), g_now);
+        break;
       }
+      s_gold -= cost;
       if (s_choiceIdx == 1) { s_flags |= n.setFlag; storyGoto(n.nextB); }
       else storyGoto(n.nextA);
       break;
@@ -679,13 +726,22 @@ static void easeHP(float* shown, int actual, uint32_t dt) {
   else if (*shown < target) { *shown += step; if (*shown > target) *shown = target; }
 }
 
-// Timed battle beats: each message phase holds, then hands the turn over.
-// A won battle routes to its node's nextA, a KO to nextB.
+// Timed story/battle beats. Shown HP always eases (heal cards animate their
+// bar too). Tunes loop until pressed; scenes run out their clock; battle
+// message phases hold, then hand the turn over (win -> nextA, KO -> nextB).
 static void updateStory(uint32_t now, uint32_t dt) {
-  const StoryNode& n = s_story[s_node];
-  if (n.kind != N_BATTLE) return;      // cards/choices advance on press
   easeHP(&s_phpShown, s_php, dt);
   easeHP(&s_ehpShown, s_ehp, dt);
+  const StoryNode& n = s_story[s_node];
+  if (n.kind == N_TUNE) {
+    if (!s_melodyActive) startMelody(MEL_LUTE, ARRAY_COUNT(MEL_LUTE), now);
+    return;
+  }
+  if (n.kind == N_SCENE) {
+    if (now - g_stateMs >= n.ms) storyGoto(n.nextA);
+    return;
+  }
+  if (n.kind != N_BATTLE) return;      // cards/choices advance on press
   uint32_t el = now - g_stateMs;
   switch (s_bp) {
     case BP_INTRO:
@@ -1733,19 +1789,97 @@ static void drawJarl(int cx, int cy, uint32_t now) {
   oled.setDrawColor(1);
 }
 
+// Quavers drifting upward on a sway — the lute is heard, not seen.
+static void drawLuteNotes(int cx, int cy, uint32_t now) {
+  for (int i = 0; i < 3; i++) {
+    int rise = (int)((now / 30 + i * 27) % 40);
+    int x = cx - 30 + i * 30 + (int)lroundf(4.0f * sinf((float)now * 0.003f + i * 2.0f));
+    int y = cy + 14 - rise;
+    oled.drawDisc(x, y, 2);                        // note head
+    oled.drawVLine(x + 2, y - 8, 8);               // stem
+    oled.drawLine(x + 2, y - 8, x + 5, y - 5);     // flag
+  }
+}
+
+// Campfire scene (N_SCENE): the camera pans down a 130px virtual scene —
+// drifting smoke, then flickering flames, then the crossed logs — and holds
+// on the crackling fire. (Even at an inn, it's always a campfire.)
+// Twin: fire_sketch.py via tools/oledsim.py. Node entry stamped g_stateMs.
+static void drawCampfire(int cx, int cy, uint32_t now) {
+  (void)cx; (void)cy;                              // full-screen scene
+  uint32_t el = now - g_stateMs;
+  float t = (el >= 3500) ? 1.0f : (float)el / 3500.0f;
+  float e = t * t * (3.0f - 2.0f * t);             // smoothstep pan
+  int cam = (int)lroundf(e * 70.0f);               // viewport top in the scene
+
+  // smoke: a loose column rising from over the flames, swelling as it climbs
+  for (int i = 0; i < 6; i++) {
+    int rise = (int)((now / 22 + i * 41) % 100);
+    int vy = 92 - rise;
+    int x = 64 + (int)lroundf((3.0f + (float)rise * 0.09f) *
+                              sinf((float)now * 0.0012f + i * 2.1f + (float)rise * 0.05f));
+    int y = vy - cam;
+    if (y > -8 && y < 72) oled.drawCircle(x, y, 1 + rise / 26);
+  }
+
+  // flames: layered flickering triangles over the log pile (base at vy 116)
+  float f1 = sinf((float)now * 0.013f);
+  float f2 = sinf((float)now * 0.021f + 1.7f);
+  float f3 = sinf((float)now * 0.017f + 4.0f);
+  int base = 116 - cam;
+  oled.drawTriangle(64 - 13 - (int)lroundf(2 * f3), base,
+                    64 + (int)lroundf(3 * f2), 84 + (int)lroundf(4 * f1) - cam,
+                    64 + 13 + (int)lroundf(2 * f1), base);
+  oled.drawTriangle(64 - 20, base,
+                    64 - 16 + (int)lroundf(2 * f2), 100 + (int)lroundf(3 * f3) - cam,
+                    64 - 8, base);
+  oled.drawTriangle(64 + 8, base,
+                    64 + 16 + (int)lroundf(2 * f1), 102 + (int)lroundf(3 * f2) - cam,
+                    64 + 20, base);
+  oled.setDrawColor(0);                            // dark core...
+  oled.drawTriangle(64 - 6, base,
+                    64 + (int)lroundf(2 * f3), 96 + (int)lroundf(3 * f2) - cam,
+                    64 + 6, base);
+  oled.setDrawColor(1);                            // ...with a bright heart
+  oled.drawTriangle(64 - 3, base,
+                    64 + (int)lroundf(1 * f1), 106 + (int)lroundf(2 * f3) - cam,
+                    64 + 3, base);
+
+  // logs: crossed diagonals + a base log, cut ends, ground line
+  for (int o = 0; o < 3; o++) {
+    oled.drawLine(38, 124 - o - cam, 78, 114 - o - cam);
+    oled.drawLine(50, 114 + o - cam, 90, 124 + o - cam);
+  }
+  oled.drawBox(44, 124 - cam, 40, 3);
+  oled.drawCircle(36, 123 - cam, 2);
+  oled.drawCircle(92, 124 - cam, 2);
+  oled.drawHLine(20, 128 - cam, 88);
+
+  // embers popping just outside the flames
+  for (int i = 0; i < 5; i++) {
+    if (((now / 110) + i) % 3 == 0) {
+      int ex = 40 + (i * 23) % 52;
+      int ey = 108 - (int)((i * 7 + now / 300) % 14) - cam;
+      oled.drawPixel(ex, ey);
+      oled.drawPixel(ex + 1, ey);
+    }
+  }
+}
+
 // Labelled HP bar with its number ("You  [######  ] 23"). Takes the ANIMATED
 // value (easeHP's output), so damage visibly drains and healing refills.
-static void drawHPBar(int y, const char* who, float hp, int maxhp) {
+// `x` lets it sit inside a card frame as well as flush in the battle layout.
+static void drawHPBar(int x, int y, const char* who, float hp, int maxhp) {
   int shown = (int)lroundf(hp);
   oled.setFont(u8g2_font_5x8_tr);
-  oled.drawStr(2, y + 7, who);
-  oled.drawFrame(24, y, 78, 8);
+  oled.drawStr(x, y + 7, who);
+  oled.drawFrame(x + 22, y, 78, 8);
   int w = (shown > 0) ? (76 * shown + maxhp - 1) / maxhp : 0;  // ceil: 1 HP stays visible
   if (w > 76) w = 76;
-  if (w > 0) oled.drawBox(25, y + 1, w, 6);
+  if (w > 0) oled.drawBox(x + 23, y + 1, w, 6);
   char b[8];
   snprintf(b, sizeof(b), "%d", shown);
-  oled.drawStr(106, y + 7, b);
+  oled.drawStr(x + 104, y + 7, b);
 }
 
 // THE choice interface, used everywhere a decision is made: one option at a
@@ -1792,13 +1926,20 @@ static void drawChoiceLine(const char* opt) {
   oled.drawStr((128 + wm) / 2 + 8, 58, ">");
 }
 
-// Framed narration card: title, wrapped body, blinking press cue.
-static void renderStoryCard(const char* title, const char* body, uint32_t now) {
+// Framed narration card: title, wrapped body, blinking press cue. A card
+// whose node heals also shows the player's HP bar refilling (a).
+static void renderStoryCard(const char* title, const char* body, uint32_t now,
+                            bool showHP) {
   drawFancyFrame();
   oled.setFont(u8g2_font_helvB08_tr);
   drawCenteredF(title, 16);
   oled.setFont(u8g2_font_5x8_tr);
-  drawWrapped(body, 64, 27, 8, 4, 114);
+  if (showHP) {
+    drawWrapped(body, 64, 27, 8, 2, 114);    // shorter body: the bar needs room
+    drawHPBar(6, 42, "You", s_phpShown, PLAYER_MAX_HP);
+  } else {
+    drawWrapped(body, 64, 27, 8, 4, 114);
+  }
   if ((now / 600) & 1) drawCenteredF("- press -", 58);
 }
 
@@ -1847,12 +1988,14 @@ static void renderBattleRoll(uint32_t el) {
 static void renderStoryBattle(uint32_t now) {
   uint32_t el = now - g_stateMs;
   if (s_bp == BP_ROLL) { renderBattleRoll(el); return; }
-  drawHPBar(0, "You", s_phpShown, PLAYER_MAX_HP);
-  drawHPBar(10, s_bdef->name, s_ehpShown, s_bdef->enemyHP);
+  drawHPBar(2, 0, "You", s_phpShown, PLAYER_MAX_HP);
+  drawHPBar(2, 10, s_bdef->name, s_ehpShown, s_bdef->enemyHP);
   int lunge = (s_bp == BP_BITE && el < 300) ? -8 : 0;   // the bite's pounce
   s_bdef->sprite(72 + lunge, 34, now);
   if (s_bp == BP_CHOOSE) {
-    drawChoiceLine(s_choiceIdx == 0 ? "Attack for 4-7" : "Brew potion");
+    drawChoiceLine(s_choiceIdx == 0
+                       ? (s_numb ? "Attack (arm numb!)" : "Attack for 4-7")
+                       : "Brew potion");
   } else {
     oled.setFont(u8g2_font_5x8_tr);
     drawWrapped(s_bmsg, 64, 54, 8, 2, 124);
@@ -1895,16 +2038,31 @@ static void renderStory(uint32_t now) {
   const StoryNode& n = s_story[s_node];
   switch (n.kind) {
     case N_CARD:
-      renderStoryCard(n.title, n.body, now);
+      renderStoryCard(n.title, n.body, now, n.heal != 0);
       break;
     case N_SPEAK:
       renderStorySpeak(n, now);
       break;
-    case N_CHOICE:
+    case N_CHOICE: {
       drawTwinkles(now);
       oled.setFont(u8g2_font_helvB08_tr);
       drawCenteredF(n.title, 20);
+      char purse[10];                        // the inventory, such as it is
+      snprintf(purse, sizeof(purse), "%d gp", s_gold);
+      oled.setFont(u8g2_font_5x8_tr);
+      oled.drawStr(126 - oled.getStrWidth(purse), 8, purse);
       drawChoiceLine(s_choiceIdx == 0 ? n.optA : n.optB);
+      break;
+    }
+    case N_TUNE:
+      if (n.art) n.art(64, 24, now);
+      oled.setFont(u8g2_font_helvB08_tr);
+      drawCenteredF(n.title, 50);
+      oled.setFont(u8g2_font_5x8_tr);
+      drawCenteredF("press to stop", 62);
+      break;
+    case N_SCENE:
+      if (n.art) n.art(64, 32, now);         // full-screen cinematic
       break;
     case N_BATTLE:
       renderStoryBattle(now);

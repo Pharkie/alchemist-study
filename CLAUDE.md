@@ -308,14 +308,22 @@ Slots per universe: bit0=slot1, bit1=slot2, bit2=slot3.
 ## Previewing display art off-device
 
 `tools/oledsim.py` replicates the U8g2 primitive subset main.cpp uses (same
-integer rounding, y-down coords, draw-color semantics incl. XOR) on a 128×64
-buffer and writes an upscaled multi-frame PNG — so procedural art can be SEEN
-and iterated before flashing. Write a sketch script that imports it,
-transliterate the C++ drawing function (keep them line-for-line twins), render
-several `now` timestamps, look at the PNG, iterate, then port back to C++.
-Lessons already learned this way: rotation aliases 1-bit art to mush at icon
-sizes (draw upright, animate with bob/glint instead), and emblems read better
-than literal faces.
+integer rounding, y-down coords, draw-color semantics incl. XOR, plus an
+approximate 5×7 text font that runs ~15% wide) on a 128×64 buffer and writes
+an upscaled multi-frame PNG — so screens can be SEEN and iterated before
+flashing. Write a sketch script that imports it, transliterate the C++
+drawing function (keep them line-for-line twins), render several `now`
+timestamps, look at the PNG, iterate, then port back to C++. Lessons already
+learned this way: rotation aliases 1-bit art to mush at icon sizes (draw
+upright, animate with bob/glint instead), and emblems read better than
+literal faces.
+
+**The shared screen contact sheet.** `tools/screens_preview.py` holds
+transliterations of every screen renderer (update it when screens change);
+`tools/make_screen_sheet.py` builds them into a captioned HTML review page.
+It is published as a Claude artifact — ALWAYS redeploy to the same URL so
+the shared page stays current:
+`https://claude.ai/code/artifact/4974b679-8055-4225-9491-1919771370a0`
 
 ## Conventions
 

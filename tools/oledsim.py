@@ -27,9 +27,35 @@ class Screen:
     def __init__(self):
         self.px = [[0] * W for _ in range(H)]
         self.color = 1          # 0 black, 1 white, 2 XOR (u8g2 setDrawColor)
+        self.font = ("5x8")
 
     def set_draw_color(self, c):
         self.color = c
+
+    def set_font(self, name):
+        self.font = name
+
+    def get_str_width(self, text):
+        _, adv = _fontspec(self.font)
+        return len(text) * adv
+
+    def draw_str(self, x, y, text):
+        """u8g2 semantics: y is the BASELINE."""
+        scale, adv = _fontspec(self.font)
+        for ch in text:
+            cols = _glyph(ch)
+            for c in range(5):
+                bits = cols[c]
+                for b in range(7):
+                    if bits & (1 << b):
+                        for sy in range(scale):
+                            for sx in range(scale):
+                                self.draw_pixel(x + c * scale + sx,
+                                                y - (7 - b) * scale + sy)
+            x += adv
+
+    def draw_centered(self, text, y):
+        self.draw_str((W - self.get_str_width(text)) // 2, y, text)
 
     def draw_pixel(self, x, y):
         x, y = int(x), int(y)
@@ -121,7 +147,54 @@ class Screen:
                 self.draw_hline(lroundf(min(xs)), y, lroundf(max(xs)) - lroundf(min(xs)) + 1)
 
 
+# Classic 5x7 column font (bit 0 = top row), ASCII 32..126. Used to
+# APPROXIMATE the firmware's fonts for layout review: scale 1 stands in for
+# 4x6/5x8/helv08 (runs ~15% wide), scale 2 for the ncenB12/14 serifs.
+_F = [
+    "0000000000", "00005F0000", "0007000700", "147F147F14", "242A7F2A12",
+    "2313086462", "3649552250", "0005030000", "001C224100", "0041221C00",
+    "082A1C2A08", "08083E0808", "0050300000", "0808080808", "0060600000",
+    "2010080402", "3E5149453E", "00427F4000", "4261514946", "2141454B31",
+    "181412 7F10".replace(" ", ""), "2745454539", "3C4A494930", "0171090503",
+    "3649494936", "064949291E", "0036360000", "0056360000", "0008142241",
+    "1414141414", "4122140800", "0201510906", "324979413E", "7E1111117E",
+    "7F49494936", "3E41414122", "7F4141221C", "7F49494941", "7F09090101",
+    "3E41415132", "7F0808087F", "00417F4100", "2040413F01", "7F08142241",
+    "7F40404040", "7F0204027F", "7F0408107F", "3E4141413E", "7F09090906",
+    "3E4151215E", "7F09192946", "4649494931", "01017F0101", "3F4040403F",
+    "1F2040201F", "7F2018207F", "6314081463", "0304780403", "6151494543",
+    "00007F4141", "0204081020", "41417F0000", "0402010204", "4040404040",
+    "0001020400", "2054545478", "7F48444438", "3844444420", "384444487F",
+    "3854545418", "087E090102", "0814545 43C".replace(" ", ""), "7F08040478",
+    "00447D4000", "2040443D00", "007F102844", "00417F4000", "7C04180478",
+    "7C08040478", "3844444438", "7C14141408", "081414187C", "7C08040408",
+    "4854545420", "043F444020", "3C4040207C", "1C2040201C", "3C4030403C",
+    "4428102844", "0C5050503C", "4464544C44", "0008364100", "00007F0000",
+    "0041360800", "08082A1C08",
+]
+FONT = [[int(g[i:i + 2], 16) for i in (0, 2, 4, 6, 8)] for g in _F]
+
+
+def _glyph(ch):
+    o = ord(ch)
+    return FONT[o - 32] if 32 <= o < 127 else FONT[31]   # '?' for exotics
+
+
+class Font:
+    """Named font -> (pixel scale, x advance). Approximate, for layout only."""
+    MAP = {
+        "4x6": (1, 5), "5x8": (1, 6), "helvR08": (1, 6), "helvB08": (1, 6),
+        "ncenR08": (1, 6), "ncenB10": (1, 6),
+        "ncenB12": (2, 12), "ncenB14": (2, 12), "ncenB18": (2, 12),
+    }
+
+
+def _fontspec(name):
+    return Font.MAP.get(name, (1, 6))
+
+
 def save_png(path, screens, scale=4, gap=4):
+
     """Write the given Screens side by side as one grayscale PNG."""
     n = len(screens)
     iw = n * W * scale + (n - 1) * gap

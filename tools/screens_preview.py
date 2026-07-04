@@ -1,0 +1,445 @@
+#!/usr/bin/env python3
+"""Contact sheet of the firmware's screens, rendered via oledsim.
+
+Transliterations of main.cpp's renderers (keep them in step when screens
+change — this is a REVIEW tool, not a source of truth). Text uses the sim's
+approximate font, so exact glyphs/widths differ slightly from the device;
+judge layout, art and collisions, not typography.
+
+Usage: python3 tools/screens_preview.py [outdir]
+"""
+import math
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from oledsim import Screen, save_png, lroundf
+
+PHI = 1.618034
+ICO_V = [(-1, PHI, 0), (1, PHI, 0), (-1, -PHI, 0), (1, -PHI, 0),
+         (0, -1, PHI), (0, 1, PHI), (0, -1, -PHI), (0, 1, -PHI),
+         (PHI, 0, -1), (PHI, 0, 1), (-PHI, 0, -1), (-PHI, 0, 1)]
+ICO_F = [(0, 11, 5), (0, 5, 1), (0, 1, 7), (0, 7, 10), (0, 10, 11),
+         (1, 5, 9), (5, 11, 4), (11, 10, 2), (10, 7, 6), (7, 1, 8),
+         (3, 9, 4), (3, 4, 2), (3, 2, 6), (3, 6, 8), (3, 8, 9),
+         (4, 9, 5), (2, 4, 11), (6, 2, 10), (8, 6, 7), (9, 8, 1)]
+D20_NUM = [20, 8, 14, 2, 16, 10, 4, 18, 6, 12, 1, 13, 7, 19, 5, 11, 17, 3, 15, 9]
+FACE_AX, FACE_AY = 0.7854, 0.6155
+STARS = [(12, 11, 0), (116, 13, 3), (10, 44, 6), (119, 46, 2), (30, 56, 5), (99, 55, 1)]
+PLAYER_MAX_HP = 30
+
+
+def sparkle(s, x, y, r):
+    s.draw_pixel(x, y)
+    for i in range(1, r + 1):
+        s.draw_pixel(x + i, y); s.draw_pixel(x - i, y)
+        s.draw_pixel(x, y + i); s.draw_pixel(x, y - i)
+
+
+def diamond(s, x, y):
+    s.draw_hline(x - 1, y, 3)
+    s.draw_pixel(x, y - 1); s.draw_pixel(x, y + 1)
+
+
+def fancy_frame(s):
+    s.draw_frame(0, 0, 128, 64)
+    s.draw_frame(3, 3, 122, 58)
+    for x, y in ((3, 3), (124, 3), (3, 60), (124, 60)):
+        diamond(s, x, y)
+
+
+def twinkles(s, now, dx=0):
+    for x, y, ph in STARS:
+        p = (now // 110 + ph * 5) % 16
+        tri = p if p < 8 else 15 - p
+        sparkle(s, x + dx, y, tri // 3)
+
+
+def moon(s, x, y, rad):
+    s.draw_circle(x, y, rad)
+    s.set_draw_color(0)
+    s.draw_disc(x + (rad + 1) // 2, y - (rad + 1) // 3, rad)
+    s.set_draw_color(1)
+
+
+def d20(s, cx, cy, r, ax, ay, az, roll=14):
+    sa, ca = math.sin(ax), math.cos(ax)
+    sb, cb = math.sin(ay), math.cos(ay)
+    sc, cc = math.sin(az), math.cos(az)
+    k = r / 1.902
+    px, py = [0.0] * 12, [0.0] * 12
+    for i, (x, y, z) in enumerate(ICO_V):
+        y1, z1 = y * ca - z * sa, y * sa + z * ca
+        x2, z2 = x * cb + z1 * sb, -x * sb + z1 * cb
+        x3, y3 = x2 * cc - y1 * sc, x2 * sc + y1 * cc
+        f = 4.5 / (4.5 - z2)
+        px[i], py[i] = cx + x3 * k * f, cy + y3 * k * f
+    for fi, (a, b, c) in enumerate(ICO_F):
+        area = (px[b] - px[a]) * (py[c] - py[a]) - (px[c] - px[a]) * (py[b] - py[a])
+        if area <= 0:
+            continue
+        s.draw_line(px[a], py[a], px[b], py[b])
+        s.draw_line(px[b], py[b], px[c], py[c])
+        s.draw_line(px[c], py[c], px[a], py[a])
+        if area < 450:
+            continue
+        n = ((D20_NUM[fi] - D20_NUM[0] + roll - 1) % 20 + 20) % 20 + 1
+        if area >= 1200:
+            s.set_font("ncenB14"); cap = 7
+        elif area >= 700:
+            s.set_font("ncenB10"); cap = 5
+        else:
+            s.set_font("5x8"); cap = 3
+        gx = lroundf((px[a] + px[b] + px[c]) / 3.0)
+        gy = lroundf((py[a] + py[b] + py[c]) / 3.0)
+        w = s.get_str_width(str(n))
+        s.draw_str(gx - w // 2, gy + cap, str(n))
+
+
+def rat(s, cx, cy, now):
+    y = cy + ((now // 300) & 1)
+    sw = math.sin(now * 0.006) * 3.0
+    s.draw_line(cx + 11, y, cx + 19, y - 2 + int(sw))
+    s.draw_line(cx + 19, y - 2 + int(sw), cx + 25, y - 6 + int(sw * 1.6))
+    s.draw_filled_ellipse(cx, y, 13, 7)
+    s.draw_disc(cx + 7, y - 1, 6)
+    s.draw_disc(cx - 12, y - 2, 5)
+    s.draw_triangle(cx - 16, y - 4, cx - 22, y, cx - 15, y + 1)
+    s.draw_disc(cx - 13, y - 8 - ((now // 700) & 1), 2)
+    s.draw_disc(cx - 9, y - 7, 2)
+    for i in range(4):
+        s.draw_box(cx - 7 + i * 5, y + 5, 2, 5)
+    s.set_draw_color(0)
+    s.draw_disc(cx - 12, y - 3, 1)
+    s.set_draw_color(1)
+    s.draw_line(cx - 21, y - 1, cx - 26, y - 2)
+    s.draw_line(cx - 21, y + 1, cx - 26, y + 2)
+
+
+def crown(s, cx, cy, now):
+    yb = cy + lroundf(2.0 * math.sin((now % 3142) * 0.002))
+    s.draw_box(cx - 16, yb + 3, 33, 6)
+    s.draw_triangle(cx - 16, yb + 3, cx - 11, yb - 8, cx - 5, yb + 3)
+    s.draw_triangle(cx - 6, yb + 3, cx, yb - 12, cx + 6, yb + 3)
+    s.draw_triangle(cx + 5, yb + 3, cx + 11, yb - 8, cx + 16, yb + 3)
+    for tx, ty in ((-11, -10), (0, -14), (11, -10)):
+        s.draw_disc(cx + tx, yb + ty, 2)
+    s.set_draw_color(0)
+    for jx in (-9, 0, 9):
+        s.draw_disc(cx + jx, yb + 6, 1)
+    s.set_draw_color(1)
+    tips = ((-11, -10), (0, -14), (11, -10))
+    k = (now // 900) % 3
+    gr = 4 if ((now // 150) & 1) else 3
+    gx, gy = cx + tips[k][0], yb + tips[k][1]
+    s.set_draw_color(2)
+    for i in range(1, gr + 1):
+        s.draw_pixel(gx + i, gy); s.draw_pixel(gx - i, gy)
+        s.draw_pixel(gx, gy + i); s.draw_pixel(gx, gy - i)
+    s.set_draw_color(1)
+
+
+def wrapped(s, text, cx, y, line_h, max_lines, w):
+    line, n = "", 0
+    for tok in text.split():
+        trial = (line + " " + tok).strip()
+        if not line or s.get_str_width(trial) <= w:
+            line = trial
+        else:
+            s.draw_str(cx - s.get_str_width(line) // 2, y, line)
+            y += line_h; n += 1
+            line = tok
+            if n >= max_lines:
+                return
+    if line and n < max_lines:
+        s.draw_str(cx - s.get_str_width(line) // 2, y, line)
+
+
+def choice_line(s, opt):
+    s.set_font("helvR08")
+    w = s.get_str_width(opt)
+    if w <= 100:
+        s.set_draw_color(0); s.draw_box(0, 52, 128, 12); s.set_draw_color(1)
+        x = (128 - w) // 2
+        s.draw_str(x, 62, opt)
+        s.set_font("5x8")
+        s.draw_str(x - 12, 61, "<"); s.draw_str(x + w + 8, 61, ">")
+        return
+    words = opt.split()
+    best, bd = 0, 999
+    idx = 0
+    for i, ch in enumerate(opt):
+        if ch == " " and abs(i - len(opt) // 2) < bd:
+            bd, best = abs(i - len(opt) // 2), i
+    l1, l2 = opt[:best], opt[best + 1:]
+    w1, w2 = s.get_str_width(l1), s.get_str_width(l2)
+    wm = max(w1, w2)
+    s.set_draw_color(0); s.draw_box(0, 41, 128, 23); s.set_draw_color(1)
+    s.draw_str((128 - w1) // 2, 52, l1)
+    s.draw_str((128 - w2) // 2, 62, l2)
+    s.set_font("5x8")
+    s.draw_str((128 - wm) // 2 - 12, 58, "<")
+    s.draw_str((128 + wm) // 2 + 8, 58, ">")
+
+
+def hp_bar(s, x, y, who, hp, maxhp):
+    s.set_font("5x8")
+    s.draw_str(x, y + 7, who)
+    s.draw_frame(x + 22, y, 78, 8)
+    w = (76 * lroundf(hp) + maxhp - 1) // maxhp if hp > 0 else 0
+    w = min(w, 76)
+    if w > 0:
+        s.draw_box(x + 23, y + 1, w, 6)
+    s.draw_str(x + 104, y + 7, str(lroundf(hp)))
+
+
+def story_card(s, title, body, now, show_hp=False, php=30):
+    fancy_frame(s)
+    s.set_font("helvB08")
+    s.draw_centered(title, 16)
+    s.set_font("5x8")
+    if show_hp:
+        wrapped(s, body, 64, 27, 8, 2, 114)
+        hp_bar(s, 6, 42, "You", php, PLAYER_MAX_HP)
+    else:
+        wrapped(s, body, 64, 27, 8, 4, 114)
+    s.draw_centered("- press -", 58)
+
+
+def speak(s, speaker, words, now):
+    crown(s, 20, 30, now)
+    s.set_font("4x6")
+    nw = s.get_str_width(speaker)
+    s.draw_str(max(1, 20 - nw // 2), 62, speaker)
+    s.draw_rframe(42, 4, 84, 44, 5)
+    s.draw_line(42, 26, 36, 30)
+    s.draw_line(42, 34, 36, 30)
+    s.set_draw_color(0); s.draw_vline(42, 27, 7); s.set_draw_color(1)
+    s.set_font("5x8")
+    wrapped(s, words, 84, 14, 8, 4, 76)
+    s.set_font("4x6")
+    s.draw_str(104, 62, "press")
+
+
+def battle(s, now, php, ehp, mode, msg=""):
+    hp_bar(s, 2, 0, "You", php, PLAYER_MAX_HP)
+    hp_bar(s, 2, 10, "Rat", ehp, 15)
+    rat(s, 72, 34, now)
+    if mode == "choose":
+        choice_line(s, msg)
+    else:
+        s.set_font("5x8")
+        wrapped(s, msg, 64, 54, 8, 2, 124)
+
+
+def roll_frame(s, el, roll):
+    if el < 1100:
+        t = el / 1100.0
+        u = 1.0 - t
+        s.set_font("5x8")
+        s.draw_centered("you attack!", 8)
+        s.draw_hline(8, 56, 112)
+        cx = 14 + lroundf(t * 50.0)
+        bounce = abs(math.sin(t * 3.0 * math.pi))
+        cy = 47 - lroundf(24.0 * u * bounce)
+        d20(s, cx, cy, 9, FACE_AX + 1.5 + 12 * u * u, FACE_AY + 1.0 + 9 * u * u,
+            6.0 * u * u, roll)
+        if cx >= 26 and t < 0.7:
+            s.draw_hline(cx - 20, cy - 3, 6)
+            s.draw_hline(cx - 26, cy + 2, 8)
+    elif el < 1700:
+        t = (el - 1100) / 600.0
+        e = t * t * (3 - 2 * t)
+        d20(s, 64, 47 - lroundf(e * 15), 9 + lroundf(e * 19),
+            FACE_AX + 1.5 * (1 - e), FACE_AY + 1.0 * (1 - e), 0.0, roll)
+    else:
+        d20(s, 64, 32, 28, FACE_AX, FACE_AY, 0.0, roll)
+        hold = el - 1700
+        if hold < 300:
+            s.draw_circle(64, 32, 30 + hold // 6)
+
+
+def brew(s, combo_names, hint=None):
+    s.draw_box(0, 0, 128, 13)
+    s.set_draw_color(0)
+    s.set_font("helvB08")
+    s.draw_str(4, 10, "Brew: healing potion")
+    s.set_draw_color(1)
+    s.set_font("5x8")
+    if not combo_names:
+        s.draw_centered("Place ingredients", 28)
+        if hint:
+            wrapped(s, hint, 64, 41, 8, 2, 120)
+        s.draw_centered("press to go back", 62)
+    else:
+        y = 27
+        for nm in combo_names:
+            s.draw_centered(nm, y); y += 10
+        s.draw_centered("turn to stir", 62)
+
+
+def tune(s, now):
+    for i in range(3):
+        rise = (now // 30 + i * 27) % 40
+        x = 64 - 30 + i * 30 + lroundf(4.0 * math.sin(now * 0.003 + i * 2.0))
+        y = 24 + 14 - rise
+        s.draw_disc(x, y, 2)
+        s.draw_vline(x + 2, y - 8, 8)
+        s.draw_line(x + 2, y - 8, x + 5, y - 5)
+    s.set_font("helvB08")
+    s.draw_centered("You strum an old tune", 50)
+    s.set_font("5x8")
+    s.draw_centered("press to stop", 62)
+
+
+def gear(s, cx, cy, now):
+    s.draw_circle(cx, cy, 8)
+    s.draw_circle(cx, cy, 3)
+    spin = now * 0.0012
+    for k in range(8):
+        a = spin + k * math.pi / 4
+        s.draw_box(cx + lroundf(10 * math.cos(a)) - 1,
+                   cy - lroundf(10 * math.sin(a)) - 1, 3, 3)
+
+
+def home_panel(s, which, dx, now):
+    if which == "place":
+        twinkles(s, now, dx)
+        moon(s, 15 + dx, 15, 6)
+        s.set_font("ncenB12")
+        s.draw_str((128 - s.get_str_width("Place the")) // 2 + dx, 26, "Place the")
+        s.draw_str((128 - s.get_str_width("ingredients")) // 2 + dx, 42, "ingredients")
+        s.draw_hline(28 + dx, 48, 72)
+        diamond(s, 22 + dx, 48); diamond(s, 106 + dx, 48)
+        s.set_font("5x8")
+        s.draw_str((128 - s.get_str_width("turn to explore")) // 2 + dx, 57, "turn to explore")
+    elif which == "story":
+        t = (now % 62832) * 0.001
+        d20(s, 64 + dx, 16, 11, 0.9 * t, 0.7 * t, 0.5 * t)
+        sr = 2 if ((now // 260) & 1) else 1
+        sparkle(s, 38 + dx, 12, sr); sparkle(s, 90 + dx, 12, sr)
+        s.set_font("ncenB12")
+        s.draw_str((128 - s.get_str_width("Story Mode")) // 2 + dx, 44, "Story Mode")
+        s.set_font("5x8")
+        s.draw_str((128 - s.get_str_width("press to begin")) // 2 + dx, 57, "press to begin")
+    else:
+        gear(s, 64 + dx, 16, now)
+        s.set_font("ncenB12")
+        s.draw_str((128 - s.get_str_width("Settings")) // 2 + dx, 44, "Settings")
+        s.set_font("5x8")
+        s.draw_str((128 - s.get_str_width("press to enter")) // 2 + dx, 57, "press to enter")
+
+
+def home(s, now, panel_names, scroll, sel):
+    for i, nm in enumerate(panel_names):
+        dx = i * 128 - scroll
+        W3 = len(panel_names) * 128
+        if dx < -W3 // 2: dx += W3
+        if dx >= W3 // 2: dx -= W3
+        if -128 < dx < 128:
+            home_panel(s, nm, dx, now)
+    dot_x = (128 - (len(panel_names) - 1) * 12) // 2
+    for i in range(len(panel_names)):
+        if i == sel:
+            s.draw_box(dot_x - 1, 60, 3, 3)
+        else:
+            s.draw_pixel(dot_x, 61)
+        dot_x += 12
+    s.draw_line(3, 28, 1, 31); s.draw_line(1, 31, 3, 34)
+    s.draw_line(124, 28, 126, 31); s.draw_line(126, 31, 124, 34)
+
+
+def choice_scene(s, now, prompt, opt, gold):
+    twinkles(s, now)
+    s.set_font("helvB08")
+    s.draw_centered(prompt, 20)
+    s.set_font("5x8")
+    p = f"{gold} gp"
+    s.draw_str(126 - s.get_str_width(p), 8, p)
+    choice_line(s, opt)
+
+
+def campfire(s, el):
+    # trimmed copy of the fire sketch (see scratch fire_sketch.py)
+    t = min(1.0, el / 3500.0)
+    e = t * t * (3 - 2 * t)
+    cam = lroundf(e * 70.0)
+    now = el
+    for i in range(6):
+        rise = (now // 22 + i * 41) % 100
+        vy = 92 - rise
+        x = 64 + lroundf((3 + rise * 0.09) * math.sin(now * 0.0012 + i * 2.1 + rise * 0.05))
+        y = vy - cam
+        if -8 < y < 72:
+            s.draw_circle(x, y, 1 + rise // 26)
+    f1, f2, f3 = (math.sin(now * k + p) for k, p in ((0.013, 0), (0.021, 1.7), (0.017, 4.0)))
+    base = 116 - cam
+    s.draw_triangle(64 - 13 - lroundf(2 * f3), base, 64 + lroundf(3 * f2),
+                    84 + lroundf(4 * f1) - cam, 64 + 13 + lroundf(2 * f1), base)
+    s.draw_triangle(64 - 20, base, 64 - 16 + lroundf(2 * f2), 100 + lroundf(3 * f3) - cam, 64 - 8, base)
+    s.draw_triangle(64 + 8, base, 64 + 16 + lroundf(2 * f1), 102 + lroundf(3 * f2) - cam, 64 + 20, base)
+    s.set_draw_color(0)
+    s.draw_triangle(64 - 6, base, 64 + lroundf(2 * f3), 96 + lroundf(3 * f2) - cam, 64 + 6, base)
+    s.set_draw_color(1)
+    s.draw_triangle(64 - 3, base, 64 + lroundf(1 * f1), 106 + lroundf(2 * f3) - cam, 64 + 3, base)
+    for o in range(3):
+        s.draw_line(38, 124 - o - cam, 78, 114 - o - cam)
+        s.draw_line(50, 114 + o - cam, 90, 124 + o - cam)
+    s.draw_box(44, 124 - cam, 40, 3)
+    s.draw_circle(36, 123 - cam, 2)
+    s.draw_circle(92, 124 - cam, 2)
+    s.draw_hline(20, 128 - cam, 88)
+
+
+def build():
+    panels = ["place", "story", "settings"]
+    shots = []
+
+    def shot(fn):
+        sc = Screen()
+        fn(sc)
+        shots.append(sc)
+
+    now = 1234
+    shot(lambda s: home(s, now, panels, 0, 0))
+    shot(lambda s: home(s, now, panels, 64, 1))       # mid-slide
+    shot(lambda s: home(s, now, panels, 128, 1))
+    shot(lambda s: home(s, now, panels, 256, 2))
+    shot(lambda s: story_card(s, "The Alchemist's Quest",
+                              "The Jarl of Whiterun requests your help.", 100))
+    shot(lambda s: choice_scene(s, now, "How do you begin?",
+                                "Request audience with Jarl", 7))
+    shot(lambda s: speak(s, "Jarl Balgruuf",
+                         "Blue mountain flower mends flesh. Now go!", now))
+    shot(lambda s: battle(s, now, 30, 15, "msg", "A giant rat attacks!"))
+    shot(lambda s: battle(s, now, 23, 15, "choose", "Attack for 4-7"))
+    shot(lambda s: roll_frame(s, 500, 14))
+    shot(lambda s: roll_frame(s, 1400, 14))
+    shot(lambda s: roll_frame(s, 1900, 14))
+    shot(lambda s: battle(s, now, 6, 9, "msg",
+                          "CRIT! Festering bite! Your arm goes numb..."))
+    shot(lambda s: battle(s, now, 6, 9, "choose", "Brew potion"))
+    shot(lambda s: brew(s, [], "'blue mountain flower mends flesh'"))
+    shot(lambda s: brew(s, ["Blue Mountain Flower"]))
+    shot(lambda s: story_card(s, "The Bannered Mare",
+                              "The innkeep eyes your purse. A hot meal or a drink?", 100))
+    shot(lambda s: choice_scene(s, now, "Spend your coin on...",
+                                "Sweetroll: 5 gp (+15 HP)", 7))
+    shot(lambda s: story_card(s, "Sweetroll",
+                              "Sweet as victory - and no thief in sight.", 100,
+                              show_hp=True, php=26))
+    shot(lambda s: choice_scene(s, now, "The fire burns low...", "Play the lute", 2))
+    shot(lambda s: tune(s, now))
+    shot(lambda s: campfire(s, 4200))
+    shot(lambda s: story_card(s, "Act 2",
+                              "You awake refreshed, ready for adventure.", 100,
+                              show_hp=True, php=30))
+    return shots
+
+
+if __name__ == "__main__":
+    outdir = sys.argv[1] if len(sys.argv) > 1 else "."
+    shots = build()
+    half = (len(shots) + 1) // 2
+    save_png(os.path.join(outdir, "screens_a.png"), shots[:half], scale=3)
+    save_png(os.path.join(outdir, "screens_b.png"), shots[half:], scale=3)
