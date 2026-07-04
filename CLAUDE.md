@@ -82,10 +82,71 @@ transition table → ±1, internal pullups; shared by `main.cpp` and `hwcheck.cp
 
 ## Architecture — single `src/main.cpp`, clean state machine
 
-States: **IDLE → IDENTIFY → STIRRING → REVEAL**
+States: **IDLE → IDENTIFY → STIRRING → REVEAL**, plus **STORY**
 
-- **IDLE** — empty base. "Place ingredients" + "Press for settings". No realm
-  shown here; a press opens **Settings** (where the realm lives).
+- **IDLE** — empty base. A **home carousel** (Place ingredients / Story Mode /
+  Settings), sitting side by side and **wrapping at both ends** (left from the
+  first panel arrives at the last). Turning the encoder **slides smoothly**
+  between panels (eased pixel scroll along the shortest way round — both
+  panels visible mid-slide, including across the wrap seam), with page dots
+  and edge chevrons as a fixed overlay. Press activates the panel in view:
+  Place = nothing yet (low "nope" buzz), Story Mode = the adventure (STORY),
+  Settings = the menu. Panels are **table-driven** (`kHomePanels` — one
+  renderer + press action per row, order matching the `HomePanel` enum;
+  adding a mode is one enum entry + one row). The Story panel's d20 tumbles
+  lazily in 3D. No realm shown here; it lives in Settings. Exiting
+  Settings/Story back to idle lands on that panel.
+- **STORY** — the adventure (Skyrim Act 1: the road/Jarl choice → the rat
+  battle with its forced healing brew → The Bannered Mare inn, mead or
+  sweetroll, rest, act-2 tease), built on a **data-driven story engine**: a
+  story is a table of `StoryNode`s (card / **speak** / choice / battle / end)
+  linked by successor indices, so acts and universes are pure data
+  (`kStorySkyrim`). `N_SPEAK` renders a character: a procedural **emblem**
+  on the left (the node's `art` fn — `drawJarl` is a bobbing, glinting crown;
+  emblems beat literal faces at 30 px), speech bubble with tail on the right,
+  speaker name beneath.
+  Choices set bits in a generic flag set (`s_flags`) that later nodes read
+  back — e.g. `SF_JARL` earns the brew-screen hint but gives the rat first
+  strike (**fold-back branching**, no bespoke per-story state) — and can
+  carry per-option HP effects (`healA`/`healB`, the inn's +5/+7).
+  Battles are parameterised by a `BattleDef` (bar label, intro line, sprite
+  fn, enemy HP, bite damage, demanded brew combo, brew title, hint + its
+  flag, first-strike flag) — the rat sprite is procedural (`drawRat`) and
+  referenced from its def; new universes bring their own. Card bodies must
+  fit the frame (~22 chars/line in 5x8, max 4 lines). KO routes to a card
+  that loops back into the battle node, which re-arms itself.
+  **UI conventions:** every decision uses the **choice spinner** at the
+  bottom of the display (`drawChoiceLine`: `< option >`, turn to cycle, press
+  to select; options too wide for one line wrap onto two) — never stacked
+  menus over the scene. In battle
+  both **HP bars stack at the top** (player above enemy — the key info),
+  animated via `easeHP` (~20 HP/s drain/refill, numbers ticking along); the
+  enemy idles below; messages share the bottom lines. The attack roll is a
+  **full-screen cutaway** (`renderBattleRoll`): the 3D icosahedron d20
+  (`drawD20Tumbling` — golden-ratio vertices, projected-area back-face
+  culling, weak perspective; numbers drawn ON the faces via `kD20FaceNum`,
+  rotated so the landing face carries the roll) tumbles along a table line,
+  zooms to face-on, holds the number; rotation is continuous throughout. A
+  landed hit — either side's — **blink-inverts the whole screen** (XOR box).
+  NOTE: U8g2 line coords are **unsigned** — anything that can leave the
+  screen must go through `drawLineClipped` or it smears wrapped lines across
+  the buffer.
+  **Battle rules:** player dice are ALWAYS honest (never fudged) → damage
+  4–7. The forcing is authored **enemy behaviour**: the `CRIT_ON_BITE`th bite
+  drops the player to `CRIT_HP` and numbs the sword arm (attacking numb is
+  fatal). Enemy HP must exceed 2× max attack damage (14) so the crit lands
+  before the enemy can die, and stay low enough that honest post-heal rolls
+  finish within a turn or two. Brewing consumes a turn (the enemy bites while
+  you're at the cauldron); a wrong potion is named and wasted — usually fatal
+  at `CRIT_HP`.
+  **Brew handoff:** the real IDENTIFY/STIRRING machinery runs with
+  `s_storyBrew` up (custom prompt screen replaces IDENTIFY; STIRRING
+  unchanged; `enterCombo(0)` waits instead of idling; the finished stir
+  routes to `storyBrewResolve` instead of REVEAL; **press with nothing
+  seated backs out** to the fight, no turn consumed). Story forces
+  `g_universe` to Skyrim while active and restores it on exit (NVS
+  untouched). Long-press anywhere (including mid-brew) abandons to the
+  carousel.
 - **IDENTIFY** — ≥1 bottle seated. **Features** the ingredient name(s) in an
   elegant serif with sparkles (a single ingredient large, two/three stacked);
   each name carries a small **ordinal caption** above it ("First/Second/Third
@@ -118,14 +179,16 @@ States: **IDLE → IDENTIFY → STIRRING → REVEAL**
 - **Short press**:
   - In IDENTIFY/STIRRING = mix & reveal — but **stirring is REQUIRED first**: a
     press before enough stir progress does nothing (a low "not yet" buzz).
-  - On IDLE = open **Settings**.
+  - On IDLE = activate the carousel panel in view (Story Mode / Settings;
+    the Place panel just gives the "not yet" buzz).
+  - In STORY = advance a card / select the spinner option.
   - In SETTINGS = activate the highlighted item.
 - **Long press (≥600 ms)** = leave a menu (SETTINGS → idle, Hardware Test →
   Settings). It no longer toggles the realm.
 
 ### Settings menu (`ST_SETTINGS`) — a reusable mini-menu
 
-Open with a press on the idle screen. **Turn** to move between items; **press**
+Open with a press on the carousel's Settings panel. **Turn** to move between items; **press**
 to start editing a value, **turn** to change it (applied live), **press** to
 confirm — the NVS write happens on confirm; **long-press** cancels an edit and
 **reverts** the value, or (when not editing) leaves the menu (resyncing to
@@ -241,6 +304,18 @@ Slots per universe: bit0=slot1, bit1=slot2, bit2=slot3.
 | 101   | Garlic + Spider Silk     | Protection    |
 | 110   | Ginseng + Spider Silk    | Invisibility  |
 | 111   | all                      | Heal          |
+
+## Previewing display art off-device
+
+`tools/oledsim.py` replicates the U8g2 primitive subset main.cpp uses (same
+integer rounding, y-down coords, draw-color semantics incl. XOR) on a 128×64
+buffer and writes an upscaled multi-frame PNG — so procedural art can be SEEN
+and iterated before flashing. Write a sketch script that imports it,
+transliterate the C++ drawing function (keep them line-for-line twins), render
+several `now` timestamps, look at the PNG, iterate, then port back to C++.
+Lessons already learned this way: rotation aliases 1-bit art to mush at icon
+sizes (draw upright, animate with bob/glint instead), and emblems read better
+than literal faces.
 
 ## Conventions
 
