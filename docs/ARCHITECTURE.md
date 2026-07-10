@@ -8,8 +8,14 @@ conventions exist to make that class of bug impossible. Follow them.
 
 ## States
 
-`IDLE · IDENTIFY · STIRRING · REVEAL · SETTINGS · DIAG`
-(`REVEAL` has sub-phases: `RP_ANIM` → `RP_NAME`.)
+`IDLE · IDENTIFY · STIRRING · RITUAL · REVEAL · SETTINGS · DIAG`
+(`REVEAL` has sub-phases: `RP_ANIM` → `RP_NAME`. `RITUAL` — the act-3 Grand
+Brew incantation — has sub-phases `RI_INTRO → RI_SHOW → RI_INPUT` with
+`RI_GOOD`/`RI_MISS` interludes, each re-stamping the phase clock.)
+
+The stirring mechanic branches by **act** (bottles seated) inside
+`updateStir()`: acts 1/3 use the classic capped-add stir, act 2 the
+"align the essences" phase game — see `docs/MINIGAMES.md`.
 
 ## The four rules
 

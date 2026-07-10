@@ -34,6 +34,39 @@ Min fill ≈ `1/(cap − decay)`: Easy ~3 s, Medium ~5 s, **Hard ~10 s+**. To ma
 level harder, move `cap` toward `decay` (raises the floor) or raise `decay`. Keep
 `cap > decay` or it's unfillable.
 
+This model runs for **acts 1 and 3** (one or three bottles seated). Act 2 uses
+the alignment model below; act 3 follows the full bar with the ritual.
+
+## Act 2 — "align the essences" (two bottles)
+
+The knob shifts your wave's phase; the target wave drifts on a random heading.
+Inside the tolerance band the bar fills; outside it drains. Per stir level:
+
+| Constant | Easy / Med / Hard | Effect |
+|---|---|---|
+| `kAlignTol[]` | `0.45 / 0.35 / 0.25` | tolerance band, radians either side of the target. |
+| `kAlignDrift[]` | `0.35 / 0.55 / 0.80` | max drift speed (rad/s); a new heading every `ALIGN_RETARGET_MS`. |
+| `kAlignFill[]` | `0.34 / 0.26 / 0.18` | bar added per **aligned** second (~3/4/5.5 s of aligned time). |
+| `kAlignDrain[]` | `0.10 / 0.14 / 0.20` | bar drained per misaligned second. |
+| `ALIGN_KNOB_STEP` | `0.05` | phase radians per encoder count (higher = twitchier knob). |
+| `ALIGN_RETARGET_MS` | `900` | how often the drift picks a new speed/direction. |
+
+The trill doubles as the hot/cold aid here: closer to phase = higher and
+steadier; far off = lower with a wide warble.
+
+## Act 3 — the Grand Brew ritual (all three bottles)
+
+After the stir bar fills, a Simon-style incantation of turns/presses plays and
+must be repeated back. All timing/shape knobs are `RIT_*` constants:
+
+| Constant | Default | Effect |
+|---|---|---|
+| `RIT_SEQ_LEN` / `RIT_ROUNDS` | `4` / `3` | incantation length; verses are prefixes (lengths 2, 3, 4). |
+| `RIT_GLYPH_MS` | `650` | per-glyph time while the incantation plays. |
+| `RIT_TURN_COUNTS` | `8` | encoder counts (~2 detents) that register a turn answer. |
+| `RIT_INPUT_TIMEOUT_MS` | `12000` | stalled answer → the verse replays (no fail). |
+| `RIT_INTRO_MS` / `RIT_GOOD_MS` / `RIT_MISS_MS` | `1800/900/1200` | card + interlude durations. |
+
 ## Audio (needs a passive buzzer)
 
 | Constant | Default | Effect |

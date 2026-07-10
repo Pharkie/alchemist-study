@@ -82,7 +82,13 @@ transition table → ±1, internal pullups; shared by `main.cpp` and `hwcheck.cp
 
 ## Architecture — single `src/main.cpp`, clean state machine
 
-States: **IDLE → IDENTIFY → STIRRING → REVEAL**
+States: **IDLE → IDENTIFY → STIRRING (→ RITUAL) → REVEAL**
+
+The **brewing mechanic scales with the "act"** — the number of bottles seated
+(design + shelved ideas in [docs/MINIGAMES.md](docs/MINIGAMES.md)): act 1 (one
+bottle) is the classic stir, act 2 (two) is the **"align the essences"**
+phase-matching game, act 3 (all three = the master potion) adds the **Grand
+Brew ritual** after the stir.
 
 - **IDLE** — empty base. "Place ingredients" + "Press for settings". No realm
   shown here; a press opens **Settings** (where the realm lives).
@@ -91,15 +97,31 @@ States: **IDLE → IDENTIFY → STIRRING → REVEAL**
   each name carries a small **ordinal caption** above it ("First/Second/Third
   ingredient", by order seated) so it's clear ingredients **stack**, not replace.
   No realm header. A subtle "turn to stir" cue.
-- **STIRRING** — encoder is turning. A **power bar** fills as you stir, with a
-  swirling vortex + rising trill (~320→1100 Hz). The add rate is **capped**, so
-  spinning faster can't rush it — each **Stir Level** (Easy/Medium/Hard) has a
-  guaranteed **minimum fill time** (~3 / 5 / 10 s; see [docs/TUNING.md](docs/TUNING.md)).
-  An escalating **caption** climbs with the bar (random brew-themed lines per band
-  at <50 / <75 / <90 / ≥90 %). The bar **always drains** (faster on harder levels);
-  pause and it bleeds down, and once empty it waits a ~3 s grace before drifting
-  back to IDENTIFY. When the bar fills, the whole screen becomes a framed
-  **"Press to create"** call-to-action (held until a press or a real combo change).
+- **STIRRING** — encoder is turning.
+  - *Acts 1 & 3:* a **power bar** fills as you stir, with a swirling vortex +
+    rising trill (~320→1100 Hz). The add rate is **capped**, so spinning faster
+    can't rush it — each **Stir Level** (Easy/Medium/Hard) has a guaranteed
+    **minimum fill time** (~3 / 5 / 10 s; see [docs/TUNING.md](docs/TUNING.md)).
+    An escalating **caption** climbs with the bar (random brew-themed lines per
+    band at <50 / <75 / <90 / ≥90 %).
+  - *Act 2 — "align the essences":* the knob steers your solid wave into phase
+    with a drifting ghost wave; the bar fills **only while aligned** and drains
+    while not. Aligned, the wave doubles up ("glows") and sparkles; the trill
+    is the hot/cold aid (closer = higher and steadier, far = low and warbling).
+    Tolerance / drift / fill rate scale with Stir Level (`kAlign*`).
+  - In both, the bar **always drains** (faster on harder levels); pause and it
+    bleeds down, and once empty it waits a ~3 s grace before drifting back to
+    IDENTIFY (turning the knob counts as activity, so a slow hunt can't fizzle).
+    When the bar fills: acts 1–2 show a framed **"Press to create"**
+    call-to-action (held until a press or a real combo change); act 3 goes
+    straight into the ritual.
+- **RITUAL** (act 3 only) — the **Grand Brew**: the brew speaks a growing
+  incantation of glyphs (**turn right / turn left / press**, each with its own
+  note so it can be memorised by ear) and you repeat it back over three verses
+  (Simon-style prefixes of one sequence, lengths 2/3/4). A wrong or stalled
+  answer **replays the verse** — never punishes; completing the incantation
+  goes **straight to REVEAL** (no extra press). Long-press abandons and
+  resyncs to the base.
 - **REVEAL** — one of **three random full-screen animations** (radar sweep /
   rising liquid / expanding rings) reveals the potion name (wrapped to two lines
   if wide) over a short ascending jingle. After ~3 s it **resyncs to the base**:
@@ -109,19 +131,22 @@ States: **IDLE → IDENTIFY → STIRRING → REVEAL**
 ### Interaction rules
 
 - **Combo latching (reliability):** IDLE and IDENTIFY follow the bottles live.
-  But once a brew is underway (STIRRING or REVEAL) the combo is **latched** —
-  pulling a magnet away (fully or partially, deliberately or via a flaky reed)
-  is **ignored**, so the swirl and the revealed potion survive. A brew only
-  restarts on a genuinely new arrangement: a bottle **added** to the set, or the
-  base cleared to **empty and then refilled**. When a stir fizzles out (knob
-  idle) it resyncs to whatever is actually on the base.
+  But once a brew is underway (STIRRING, RITUAL or REVEAL) the combo is
+  **latched** — pulling a magnet away (fully or partially, deliberately or via
+  a flaky reed) is **ignored**, so the swirl, the ritual and the revealed
+  potion survive. A brew only restarts on a genuinely new arrangement: a bottle
+  **added** to the set, or the base cleared to **empty and then refilled**.
+  When a stir fizzles out (knob idle) it resyncs to whatever is actually on
+  the base.
 - **Short press**:
   - In IDENTIFY/STIRRING = mix & reveal — but **stirring is REQUIRED first**: a
     press before enough stir progress does nothing (a low "not yet" buzz).
+  - In RITUAL = a "press" answer to the incantation (or skips the intro card).
   - On IDLE = open **Settings**.
   - In SETTINGS = activate the highlighted item.
 - **Long press (≥600 ms)** = leave a menu (SETTINGS → idle, Hardware Test →
-  Settings). It no longer toggles the realm.
+  Settings) or **abandon the ritual** (resync to the base). It no longer
+  toggles the realm.
 
 ### Settings menu (`ST_SETTINGS`) — a reusable mini-menu
 

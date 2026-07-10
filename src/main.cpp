@@ -5,11 +5,18 @@
 // potion bottles are seated, an OLED names the resulting potion, a
 // rotary encoder is the "stir" control, and a passive buzzer scores it.
 //
-// State machine: IDLE -> IDENTIFY -> STIRRING -> REVEAL, plus SETTINGS + DIAG.
+// State machine: IDLE -> IDENTIFY -> STIRRING (-> RITUAL) -> REVEAL,
+// plus SETTINGS + DIAG.
 //   IDLE      empty base; "Place ingredients" + "Press for settings".
 //   IDENTIFY  >=1 bottle seated; features the ingredient name(s) + sparkles.
-//   STIRRING  turn to fill the power bar; when full -> "Press to create".
-//   REVEAL    press names the potion with a random animation; auto-returns ~3s.
+//   STIRRING  the brewing mechanic scales with the ACT (= bottles seated):
+//               act 1 (one bottle):  turn to fill the power bar (classic stir).
+//               act 2 (two bottles): "align the essences" — steer your wave
+//               into phase with a drifting one; the bar fills only aligned.
+//             when full -> "Press to create" (acts 1-2) or the ritual (act 3).
+//   RITUAL    act 3 (all three = the master potion): the Grand Brew — repeat
+//             a growing incantation of turns/presses (Simon-style) to finish.
+//   REVEAL    the potion is named with a random animation; auto-returns ~3s.
 //   SETTINGS  press on idle; realm / mute / brightness / stir level / etc.
 //   DIAG      built-in hardware test (Settings -> Hardware Test).
 //
@@ -120,6 +127,21 @@ static constexpr uint16_t PITCH_MIN_HZ      = 320;
 static constexpr uint16_t PITCH_MAX_HZ      = 1100;
 static constexpr int32_t  ENC_STEP          = 4;     // encoder counts per menu/select step
 
+// Act 2 — "align the essences" (two-ingredient brews). The knob shifts your
+// wave's phase; the target wave drifts. See kAlign* (per stir level) below.
+static constexpr float    ALIGN_KNOB_STEP   = 0.05f; // phase radians per encoder count
+static constexpr uint32_t ALIGN_RETARGET_MS = 900;   // how often the drift picks a new heading
+
+// Act 3 — the Grand Brew ritual (three-ingredient master potion).
+static constexpr uint32_t RIT_INTRO_MS         = 1800;  // "The Grand Brew" card
+static constexpr uint32_t RIT_GLYPH_MS         = 650;   // per glyph while the incantation plays
+static constexpr uint32_t RIT_GOOD_MS          = 900;   // "well stirred" between verses
+static constexpr uint32_t RIT_MISS_MS          = 1200;  // "it resists" before a replay
+static constexpr uint32_t RIT_INPUT_TIMEOUT_MS = 12000; // stalled answer -> replay the verse
+static constexpr int32_t  RIT_TURN_COUNTS      = 8;     // counts (~2 detents) per turn answer
+static constexpr int      RIT_SEQ_LEN          = 4;     // full incantation length
+static constexpr int      RIT_ROUNDS           = 3;     // verse lengths 2, 3, 4 (prefixes)
+
 // Firmware version — keep in step with the git tag / GitHub release.
 #define FW_VERSION "v0.1"
 
@@ -130,7 +152,7 @@ Preferences prefs;
 static bool g_haveDisplay = false;  // set at boot; if false we run headless
 
 // ---- Runtime state -----------------------------------------------------
-enum State { ST_IDLE, ST_IDENTIFY, ST_STIRRING, ST_REVEAL, ST_SETTINGS, ST_DIAG };
+enum State { ST_IDLE, ST_IDENTIFY, ST_STIRRING, ST_RITUAL, ST_REVEAL, ST_SETTINGS, ST_DIAG };
 static uint32_t g_now      = 0;            // single time source: millis() sampled once per loop
 static State    g_state    = ST_IDLE;
 static uint32_t g_stateMs  = 0;            // g_now when the current state/phase began
@@ -170,6 +192,15 @@ static uint32_t s_rateWinMs   = 0;         // window start
 static int32_t  s_rateAcc     = 0;         // |encoder counts| accumulated this window
 static int      s_stirCps     = 0;         // current estimate (counts/sec)
 
+// Act 2 alignment model: your wave's phase chases a drifting target phase.
+// Both are kept wrapped to [-pi, pi]; only their (wrapped) difference matters.
+static float    s_alignPlayer = 0.0f;      // your phase (the knob moves this)
+static float    s_alignTarget = 0.0f;      // the drifting phase to match
+static float    s_alignVel    = 0.0f;      // current drift velocity (rad/s)
+static uint32_t s_alignHeadMs = 0;         // when the drift last picked a heading
+static float    s_alignErr    = 1.0f;      // |wrapped diff| / pi (0 = in phase)
+static bool     s_alignOk     = false;     // inside the level's tolerance band
+
 // Flavour text shown while stirring, escalating as the bar fills. The band is
 // chosen by progress (<50 / <75 / <90 / >=90 %); a random line from that band
 // is picked whenever the band changes (update*() picks, render*() just draws).
@@ -197,9 +228,30 @@ static const uint8_t kStirPoolN[4] = {
 static int         s_stirMsgBand = -1;                 // current band (-1 = unset)
 static const char* s_stirMsg     = kStirEarly[0];      // line currently shown
 
+// Act 2 flavour text: one pool while hunting for the phase, one while holding
+// it. A fresh random line is picked whenever the aligned/seeking state flips.
+static const char* const kAlignSeek[] = {
+  "align the essences", "seek the resonance", "feel for the current", "chase the harmony",
+};
+static const char* const kAlignHold[] = {
+  "hold the resonance", "steady... steady", "they sing as one", "don't lose it now",
+};
+static int         s_alignMsgOk = -1;                  // -1 unset / 0 seeking / 1 holding
+static const char* s_alignMsg   = kAlignSeek[0];
+
 // reveal sub-phases (timed from g_stateMs; advancing a phase re-stamps it)
 enum RevealPhase { RP_ANIM, RP_NAME };
 static RevealPhase s_revealPhase = RP_ANIM;
+
+// Act 3 ritual (Simon-style incantation). Sub-phases re-stamp g_stateMs.
+enum RitSymbol { SYM_CW = 0, SYM_CCW = 1, SYM_PRESS = 2 };
+enum RitPhase  { RI_INTRO, RI_SHOW, RI_INPUT, RI_GOOD, RI_MISS };
+static RitPhase s_ritPhase    = RI_INTRO;
+static uint8_t  s_ritSeq[RIT_SEQ_LEN];     // the full incantation (verses are prefixes)
+static int      s_ritRound    = 0;         // current verse (0..RIT_ROUNDS-1)
+static int      s_ritShowIdx  = -1;        // glyph last sounded while showing
+static int      s_ritInputIdx = 0;         // how many answers given this verse
+static int32_t  s_ritAccum    = 0;         // encoder counts toward a turn answer
 
 // button
 static bool     s_btnDown   = false;
@@ -218,6 +270,14 @@ static const Note MEL_SUCCESS[]  = { {523, 90}, {659, 90}, {784, 90}, {1047, 150
 static const Note MEL_TOGGLE[]   = { {700, 110}, {1100, 150} };   // distinct two-note
 static const Note MEL_NOTREADY[] = { {200, 70}, {0, 50}, {200, 70} }; // low "nope"
 
+// Ritual voices. Each incantation symbol has its own note, so the sequence can
+// be memorised by ear as well as by eye (and answers echo the same note back).
+static const Note MEL_SYM_CW[]    = { {880, 240} };               // turn right = high
+static const Note MEL_SYM_CCW[]   = { {392, 240} };               // turn left  = low
+static const Note MEL_SYM_PRESS[] = { {587, 240} };               // press      = mid
+static const Note MEL_RITBEGIN[]  = { {330, 140}, {392, 140}, {494, 220} }; // mystic rise
+static const Note MEL_RITGOOD[]   = { {659, 90}, {880, 150} };    // verse complete
+
 static const Note* s_melody     = nullptr;
 static uint8_t      s_melodyLen = 0;
 static uint8_t      s_melodyIdx = 0;
@@ -225,6 +285,21 @@ static uint32_t     s_noteStartMs = 0;
 static bool         s_melodyActive = false;
 static bool         s_buzzerOn = false;
 static uint16_t     s_trillHz  = 0;   // last trill pitch sent to tone() (0 = none)
+
+// ---- Small shared helpers ----------------------------------------------
+static int comboCount(uint8_t c) {         // bottles seated = the brewing "act"
+  return ((c >> 0) & 1) + ((c >> 1) & 1) + ((c >> 2) & 1);
+}
+
+static float frand() {                     // uniform 0..1 from the HW RNG
+  return (float)(esp_random() & 0xFFFF) / 65535.0f;
+}
+
+static float wrapPi(float a) {             // wrap an angle to [-pi, pi]
+  while (a >  (float)M_PI) a -= 2.0f * (float)M_PI;
+  while (a < -(float)M_PI) a += 2.0f * (float)M_PI;
+  return a;
+}
 
 static void playCurrentNote() {
   uint16_t f = s_melody[s_melodyIdx].freq;
@@ -264,12 +339,24 @@ static void updateAudio(uint32_t now) {
     return;  // a melody owns the buzzer while it plays
   }
 
-  // Brewing trill: pitch rises with stir progress, decays with it. A small
-  // alternating offset gives the "trill" warble.
-  bool stirSound = (g_state == ST_STIRRING) && (s_stirProgress > 0.02f);
+  // Brewing trill. Act 1/3: pitch rises with stir progress, small warble.
+  // Act 2: the trill IS the hot/cold aid — closer to phase = higher and
+  // steadier; far off = lower with a wide warble. It sounds from the first
+  // turn (before any progress) because it's guidance, not garnish.
+  const int range = PITCH_MAX_HZ - PITCH_MIN_HZ;
+  bool act2 = (g_state == ST_STIRRING) && (comboCount(g_combo) == 2) && !s_stirReady;
+  bool stirSound = (g_state == ST_STIRRING) && (act2 || s_stirProgress > 0.02f);
   if (stirSound) {
-    int f = PITCH_MIN_HZ + (int)(s_stirProgress * (PITCH_MAX_HZ - PITCH_MIN_HZ));
-    f += ((now / 35) & 1) ? 14 : -14;
+    int f, wob;
+    if (act2) {
+      f = PITCH_MIN_HZ + (int)((1.0f - s_alignErr) * range * 0.6f
+                               + s_stirProgress * range * 0.4f);
+      wob = s_alignOk ? 6 : 12 + (int)(s_alignErr * 40.0f);
+    } else {
+      f = PITCH_MIN_HZ + (int)(s_stirProgress * range);
+      wob = 14;
+    }
+    f += ((now / 35) & 1) ? wob : -wob;
     if (f < 50) f = 50;
     if ((uint16_t)f != s_trillHz) {   // re-arm LEDC only when the pitch changes
       s_trillHz = (uint16_t)f;
@@ -319,8 +406,8 @@ static void enterCombo(uint8_t c) {
 // just latched (with a timestamp); a grace timer decides when to fall back to
 // idle, so turning still starts the stir on the cooldown after a magnet leaves.
 //   - IDLE/IDENTIFY: a present bottle updates the combo live (compose before stir).
-//   - STIRRING/REVEAL: combo is fully latched; only a genuinely new arrangement
-//     (a bottle ADDED, or base cleared then refilled) starts a fresh brew.
+//   - STIRRING/RITUAL/REVEAL: combo is fully latched; only a genuinely new
+//     arrangement (a bottle ADDED, or base cleared then refilled) starts fresh.
 static void onSensedComboChange() {
   uint8_t raw = s_sensedCombo;
 
@@ -341,7 +428,7 @@ static void onSensedComboChange() {
     return;
   }
 
-  // STIRRING / REVEAL: latched — only a new arrangement restarts.
+  // STIRRING / RITUAL / REVEAL: latched — only a new arrangement restarts.
   bool addedNew = (raw & ~g_combo) != 0;
   if (s_baseEmptied || addedNew) enterCombo(raw);
 }
@@ -363,6 +450,14 @@ static const float        kStirCap[]    = { 0.48f,   0.50f,   0.60f };   // max 
 static const float        kStirResist[] = { 0.30f,   0.20f,   0.10f };   // mild end-loading (small so the top stays reachable)
 static const float        kStirDecay[]  = { 0.15f,   0.30f,   0.50f };   // bar drained per second, ALWAYS
 static constexpr int      kStirN        = 3;
+
+// Act 2 "align the essences", per stir level. The bar fills only while your
+// phase is inside the tolerance band around the drifting target, and drains
+// while it isn't — so aligned-time to fill is ~1/fill sec plus hunting time.
+static const float        kAlignTol[]   = { 0.45f, 0.35f, 0.25f };  // radians either side
+static const float        kAlignDrift[] = { 0.35f, 0.55f, 0.80f };  // max drift speed (rad/s)
+static const float        kAlignFill[]  = { 0.34f, 0.26f, 0.18f };  // bar added per aligned sec
+static const float        kAlignDrain[] = { 0.10f, 0.14f, 0.20f };  // bar drained per misaligned sec
 
 static void applyBrightness() {
   if (g_haveDisplay) oled.setContrast((uint8_t)map(g_brightness, 1, 5, 16, 255));
@@ -473,6 +568,114 @@ static void menuPress() {
   }
 }
 
+// ---- Reveal kick-off (shared by the press path and the ritual) ----------
+static void startReveal(uint32_t now) {
+  s_revealPhase = RP_ANIM;
+  s_revealStyle = (int)(esp_random() % 3);   // pick a random reveal animation
+  enterState(ST_REVEAL);                     // stamps the phase clock
+  startMelody(MEL_SUCCESS, ARRAY_COUNT(MEL_SUCCESS), now);
+  Serial.printf("[reveal] %s\n", kPotions[g_universe][g_combo]);
+}
+
+// ---- Act 3: the Grand Brew ritual ---------------------------------------
+// All three essences demand more than stirring: after the bar fills, the brew
+// speaks a growing incantation of glyphs (turn right / turn left / press) and
+// you must repeat it back. RIT_ROUNDS verses, each a longer prefix of the same
+// RIT_SEQ_LEN-symbol sequence (classic Simon). A wrong answer just replays the
+// verse — the master potion should feel earned, not punishing.
+
+static int ritRoundLen() { return s_ritRound + 2; }   // verse lengths 2, 3, 4
+
+static void playSymTone(uint8_t sym, uint32_t now) {
+  switch (sym) {
+    case SYM_CW:  startMelody(MEL_SYM_CW,  ARRAY_COUNT(MEL_SYM_CW),  now); break;
+    case SYM_CCW: startMelody(MEL_SYM_CCW, ARRAY_COUNT(MEL_SYM_CCW), now); break;
+    default:      startMelody(MEL_SYM_PRESS, ARRAY_COUNT(MEL_SYM_PRESS), now); break;
+  }
+}
+
+// Begin (or replay) the current verse's SHOW phase. Re-stamps the phase clock;
+// glyph i sounds/draws during elapsed [i*RIT_GLYPH_MS, (i+1)*RIT_GLYPH_MS).
+static void ritShowBegin(uint32_t now) {
+  s_ritPhase = RI_SHOW;
+  g_stateMs = now;
+  s_ritShowIdx = -1;
+  s_ritInputIdx = 0;
+  s_ritAccum = 0;
+}
+
+static void ritualEnter(uint32_t now) {
+  for (int i = 0; i < RIT_SEQ_LEN; i++) s_ritSeq[i] = (uint8_t)(esp_random() % 3);
+  s_ritRound = 0;
+  s_ritPhase = RI_INTRO;
+  enterState(ST_RITUAL);
+  startMelody(MEL_RITBEGIN, ARRAY_COUNT(MEL_RITBEGIN), now);
+  Serial.println("[ritual] the Grand Brew begins");
+}
+
+// One answer (turn or press) during RI_INPUT. Echoes the symbol's note, then
+// advances the verse, finishes the ritual, or flags a miss.
+static void ritInput(uint8_t sym, uint32_t now) {
+  if (s_ritPhase != RI_INPUT) return;
+  playSymTone(sym, now);
+  if (sym != s_ritSeq[s_ritInputIdx]) {
+    s_ritPhase = RI_MISS;
+    g_stateMs = now;
+    startMelody(MEL_NOTREADY, ARRAY_COUNT(MEL_NOTREADY), now);
+    return;
+  }
+  s_ritInputIdx++;
+  g_stateMs = now;                      // each answer refreshes the stall timeout
+  if (s_ritInputIdx < ritRoundLen()) return;
+  if (s_ritRound >= RIT_ROUNDS - 1) {   // incantation complete -> the reveal
+    startReveal(now);
+  } else {
+    s_ritPhase = RI_GOOD;
+    g_stateMs = now;
+    startMelody(MEL_RITGOOD, ARRAY_COUNT(MEL_RITGOOD), now);
+  }
+}
+
+static void updateRitual(uint32_t now, int32_t d) {
+  uint32_t el = now - g_stateMs;
+  switch (s_ritPhase) {
+    case RI_INTRO:
+      if (el >= RIT_INTRO_MS) ritShowBegin(now);
+      break;
+    case RI_SHOW: {
+      int idx = (int)(el / RIT_GLYPH_MS);
+      int len = ritRoundLen();
+      if (idx < len && idx != s_ritShowIdx) {
+        s_ritShowIdx = idx;
+        playSymTone(s_ritSeq[idx], now);
+      }
+      if (idx >= len) {                 // verse spoken -> your turn
+        s_ritPhase = RI_INPUT;
+        g_stateMs = now;
+        s_ritInputIdx = 0;
+        s_ritAccum = 0;
+      }
+      break;
+    }
+    case RI_INPUT:
+      if (d != 0) {
+        // A direction flip clears the accumulator so jiggle can't add up.
+        if ((d > 0 && s_ritAccum < 0) || (d < 0 && s_ritAccum > 0)) s_ritAccum = 0;
+        s_ritAccum += d;
+        if      (s_ritAccum >=  RIT_TURN_COUNTS) { s_ritAccum = 0; ritInput(SYM_CW,  now); }
+        else if (s_ritAccum <= -RIT_TURN_COUNTS) { s_ritAccum = 0; ritInput(SYM_CCW, now); }
+      }
+      if (now - g_stateMs >= RIT_INPUT_TIMEOUT_MS) ritShowBegin(now);  // lost? hear it again
+      break;
+    case RI_GOOD:
+      if (el >= RIT_GOOD_MS) { s_ritRound++; ritShowBegin(now); }
+      break;
+    case RI_MISS:
+      if (el >= RIT_MISS_MS) ritShowBegin(now);
+      break;
+  }
+}
+
 // ---- Button actions (state-aware) --------------------------------------
 static void onShortPress(uint32_t now) {
   switch (g_state) {
@@ -482,15 +685,12 @@ static void onShortPress(uint32_t now) {
     case ST_IDENTIFY:
     case ST_STIRRING:
       if (g_combo == 0) break;
-      if (s_stirReady) {
-        s_revealPhase = RP_ANIM;
-        s_revealStyle = (int)(esp_random() % 3);   // pick a random reveal animation
-        enterState(ST_REVEAL);                     // stamps the phase clock
-        startMelody(MEL_SUCCESS, ARRAY_COUNT(MEL_SUCCESS), now);
-        Serial.printf("[reveal] %s\n", kPotions[g_universe][g_combo]);
-      } else {
-        startMelody(MEL_NOTREADY, ARRAY_COUNT(MEL_NOTREADY), now);  // stir first
-      }
+      if (s_stirReady) startReveal(now);
+      else startMelody(MEL_NOTREADY, ARRAY_COUNT(MEL_NOTREADY), now);  // stir first
+      break;
+    case ST_RITUAL:
+      if (s_ritPhase == RI_INTRO) ritShowBegin(now);   // impatient? skip the card
+      else ritInput(SYM_PRESS, now);                   // ignored outside RI_INPUT
       break;
     case ST_SETTINGS:
       menuPress();
@@ -513,6 +713,7 @@ static void onLongPress(uint32_t now) {
       } else settingsExit();                     // ...otherwise leave the menu
       break;
     case ST_DIAG:     settingsEnter(); break;     // diagnostic back to the menu
+    case ST_RITUAL:   enterCombo(s_sensedCombo); break;  // abandon the ritual, resync
     default:          break;
   }
 }
@@ -558,44 +759,85 @@ static void updateStir(uint32_t now, uint32_t dt, int32_t d) {
       enterState(ST_STIRRING);
       s_stirZeroMs = now; s_stirMsgBand = -1;
       s_stirCps = 0; s_rateAcc = 0; s_rateWinMs = now;   // fresh rate window
+      // Act 2 alignment: start out of phase (1.2..3.2 rad off) with a fresh
+      // drift heading, so there's always a hunt before the bar can fill.
+      s_alignPlayer = 0.0f;
+      s_alignTarget = 1.2f + frand() * 2.0f;
+      s_alignVel    = 0.0f;
+      s_alignHeadMs = 0;                 // forces a heading pick on the first tick
+      s_alignErr    = 1.0f;
+      s_alignOk     = false;
+      s_alignMsgOk  = -1;
     }
+    s_stirZeroMs = now;                  // turning counts as activity: no mid-hunt fizzle
   }
 
   if (s_stirReady) return;          // armed: hold the full bar until press/combo change
   if (g_state != ST_STIRRING) return;
 
-  // The bar ALWAYS drains; stirring adds against it, with diminishing returns
-  // toward the top — so you fight the decay, and must stir ever faster near
-  // full. The decay itself is the "grace": stop and it bleeds down, returning
-  // to identify only once it hits zero.
   const int lvl = g_stirLevelIdx;
+  const int act = comboCount(g_combo);   // bottles seated pick the mechanic
 
-  // Estimate current stir rate (counts/sec) over a short window, so the cap
-  // applies smoothly. (The window is reset whenever a stir/brew starts.)
-  s_rateAcc += (d < 0) ? -d : d;
-  if (now - s_rateWinMs >= 120) {
-    s_stirCps = (int)(s_rateAcc * 1000 / (now - s_rateWinMs));
-    s_rateAcc = 0; s_rateWinMs = now;
-  }
+  if (act == 2) {
+    // ---- Act 2: align the essences. The knob shifts your phase; the target
+    // phase drifts on a random heading that changes every ALIGN_RETARGET_MS.
+    // In tolerance the bar fills; out of it the bar drains — no spin speed
+    // helps, only staying locked on.
+    s_alignPlayer = wrapPi(s_alignPlayer + ALIGN_KNOB_STEP * (float)d);
+    if (now - s_alignHeadMs >= ALIGN_RETARGET_MS) {
+      s_alignHeadMs = now;
+      float mag = (0.3f + 0.7f * frand()) * kAlignDrift[lvl];
+      s_alignVel = (esp_random() & 1) ? mag : -mag;
+    }
+    s_alignTarget = wrapPi(s_alignTarget + s_alignVel * (float)dt / 1000.0f);
 
-  // Capped add vs. constant decay. Past cap/gain c/s, faster spinning adds
-  // nothing, so the minimum fill time is fixed regardless of spin speed.
-  float addRate = kStirGain[lvl] * (float)s_stirCps;
-  if (addRate > kStirCap[lvl]) addRate = kStirCap[lvl];
-  s_stirProgress += addRate * (1.0f - kStirResist[lvl] * s_stirProgress) * (float)dt / 1000.0f;
-  s_stirProgress -= kStirDecay[lvl] * (float)dt / 1000.0f;
+    float diff = wrapPi(s_alignPlayer - s_alignTarget);
+    s_alignErr = fabsf(diff) / (float)M_PI;
+    s_alignOk  = fabsf(diff) <= kAlignTol[lvl];
+    s_stirProgress += (s_alignOk ?  kAlignFill[lvl]
+                                 : -kAlignDrain[lvl]) * (float)dt / 1000.0f;
 
-  // Escalating stir text: pick a fresh random line each time the band changes.
-  int band = s_stirProgress >= 0.90f ? 3 : s_stirProgress >= 0.75f ? 2
-           : s_stirProgress >= 0.50f ? 1 : 0;
-  if (band != s_stirMsgBand) {
-    s_stirMsgBand = band;
-    s_stirMsg = kStirPools[band][esp_random() % kStirPoolN[band]];
+    // Caption flips between "seek" and "hold" pools with the aligned state.
+    int ok = s_alignOk ? 1 : 0;
+    if (ok != s_alignMsgOk) {
+      s_alignMsgOk = ok;
+      s_alignMsg = ok ? kAlignHold[esp_random() % ARRAY_COUNT(kAlignHold)]
+                      : kAlignSeek[esp_random() % ARRAY_COUNT(kAlignSeek)];
+    }
+  } else {
+    // ---- Acts 1 & 3: the classic stir. The bar ALWAYS drains; stirring adds
+    // against it, with diminishing returns toward the top — so you fight the
+    // decay, and must stir ever faster near full. The decay itself is the
+    // "grace": stop and it bleeds down, returning to identify at zero.
+
+    // Estimate current stir rate (counts/sec) over a short window, so the cap
+    // applies smoothly. (The window is reset whenever a stir/brew starts.)
+    s_rateAcc += (d < 0) ? -d : d;
+    if (now - s_rateWinMs >= 120) {
+      s_stirCps = (int)(s_rateAcc * 1000 / (now - s_rateWinMs));
+      s_rateAcc = 0; s_rateWinMs = now;
+    }
+
+    // Capped add vs. constant decay. Past cap/gain c/s, faster spinning adds
+    // nothing, so the minimum fill time is fixed regardless of spin speed.
+    float addRate = kStirGain[lvl] * (float)s_stirCps;
+    if (addRate > kStirCap[lvl]) addRate = kStirCap[lvl];
+    s_stirProgress += addRate * (1.0f - kStirResist[lvl] * s_stirProgress) * (float)dt / 1000.0f;
+    s_stirProgress -= kStirDecay[lvl] * (float)dt / 1000.0f;
+
+    // Escalating stir text: pick a fresh random line each time the band changes.
+    int band = s_stirProgress >= 0.90f ? 3 : s_stirProgress >= 0.75f ? 2
+             : s_stirProgress >= 0.50f ? 1 : 0;
+    if (band != s_stirMsgBand) {
+      s_stirMsgBand = band;
+      s_stirMsg = kStirPools[band][esp_random() % kStirPoolN[band]];
+    }
   }
 
   if (s_stirProgress >= 1.0f) {
     s_stirProgress = 1.0f;
-    s_stirReady = true;
+    if (act == 3) ritualEnter(now);      // the master potion demands the Grand Brew
+    else          s_stirReady = true;    // acts 1-2: arm "Press to create"
   } else if (s_stirProgress > 0.0f) {
     s_stirZeroMs = now;                  // still brewing — keep the grace clock fresh
   } else {
@@ -801,7 +1043,41 @@ static void renderStirring(uint32_t now) {
     return;
   }
 
-  // Otherwise: the brewing vortex + power bar.
+  // Act 2: two waves to bring into resonance. Your wave is solid; the essence
+  // you're chasing is a ghost (every 3rd pixel). Turn the knob to slide your
+  // wave until they merge — aligned, the wave doubles up ("glows") and
+  // sparkles; the bar fills only while you hold it there.
+  if (comboCount(g_combo) == 2) {
+    oled.setFont(u8g2_font_helvR08_tr);
+    drawCenteredF("- attuning -", 8);
+
+    const int wy = 25;            // wave centreline
+    const float AMP = 8.0f, KX = 0.10f;
+    for (int x = 2; x < 126; x++) {
+      int ty = wy + (int)lroundf(AMP * sinf(KX * (float)x + s_alignTarget));
+      if ((x % 3) == 0) oled.drawPixel(x, ty);              // the ghost essence
+      int py = wy + (int)lroundf(AMP * sinf(KX * (float)x + s_alignPlayer));
+      oled.drawPixel(x, py);                                // your essence
+      if (s_alignOk) oled.drawPixel(x, py + 1);             // in resonance: glow
+    }
+    if (s_alignOk) {
+      int sr = ((now / 180) & 1) ? 2 : 1;
+      drawSparkle(6, wy, sr);
+      drawSparkle(122, wy, sr);
+    }
+
+    const int bx = 14, by = 41, bw = 100, bh = 10;
+    oled.drawFrame(bx, by, bw, bh);
+    int fill = (int)lroundf((float)(bw - 4) * s_stirProgress);
+    if (fill > 0) oled.drawBox(bx + 2, by + 2, fill, bh - 4);
+
+    oled.setFont(u8g2_font_5x8_tr);
+    drawCenteredF(s_alignMsg, 62);
+    oled.sendBuffer();
+    return;
+  }
+
+  // Acts 1 & 3: the brewing vortex + power bar.
   const int cx = 64, cy = 23;
   const int Rout = 16;
 
@@ -926,6 +1202,108 @@ static void renderReveal(uint32_t now) {
   oled.sendBuffer();
 }
 
+// --- Act 3 ritual screens -------------------------------------------------
+// The incantation glyphs, drawn with primitives (no icon font, no flash cost):
+// a 300-degree arc with an arrowhead for the turns, a dotted ring for press.
+static void drawRitGlyph(uint8_t sym, int cx, int cy) {
+  const int R = 13;
+  if (sym == SYM_PRESS) {
+    oled.drawCircle(cx, cy, R);
+    oled.drawDisc(cx, cy, 5);
+    return;
+  }
+  // In screen coords (y down) an increasing angle sweeps clockwise, so
+  // dir=+1 reads as "turn right" and dir=-1 as "turn left".
+  int dir = (sym == SYM_CW) ? 1 : -1;
+  for (float t = 0.35f; t < 5.6f; t += 0.10f) {
+    float a = (float)dir * t - (float)M_PI_2;   // arc starts at 12 o'clock
+    oled.drawPixel(cx + (int)lroundf(R * cosf(a)), cy + (int)lroundf(R * sinf(a)));
+  }
+  // Arrowhead at the arc's end, pointing along the direction of travel.
+  float ae = (float)dir * 5.6f - (float)M_PI_2;
+  float tx = -sinf(ae) * (float)dir, ty = cosf(ae) * (float)dir;  // unit tangent
+  float nx = cosf(ae),               ny = sinf(ae);               // unit radial
+  int hx = cx + (int)lroundf(R * cosf(ae)), hy = cy + (int)lroundf(R * sinf(ae));
+  oled.drawTriangle(hx + (int)lroundf(6.0f * tx), hy + (int)lroundf(6.0f * ty),
+                    hx + (int)lroundf(3.5f * nx), hy + (int)lroundf(3.5f * ny),
+                    hx - (int)lroundf(3.5f * nx), hy - (int)lroundf(3.5f * ny));
+}
+
+static const char* ritSymWord(uint8_t sym) {
+  return sym == SYM_CW ? "turn right" : sym == SYM_CCW ? "turn left" : "press";
+}
+
+static void renderRitual(uint32_t now) {
+  oled.clearBuffer();
+  uint32_t el = now - g_stateMs;
+  char hdr[24];
+
+  switch (s_ritPhase) {
+    case RI_INTRO:
+      drawFancyFrame();
+      oled.setFont(u8g2_font_helvR08_tr);
+      drawCenteredF("all three essences...", 16);
+      oled.setFont(u8g2_font_ncenB12_tr);
+      drawCenteredF("The Grand", 33);
+      drawCenteredF("Brew", 49);
+      oled.setFont(u8g2_font_5x8_tr);
+      drawCenteredF("watch the incantation", 60);
+      break;
+
+    case RI_SHOW: {
+      snprintf(hdr, sizeof(hdr), "verse %d of %d - watch", s_ritRound + 1, RIT_ROUNDS);
+      oled.setFont(u8g2_font_5x8_tr);
+      drawCenteredF(hdr, 8);
+      int idx = (int)(el / RIT_GLYPH_MS);
+      uint32_t glyphEl = el - (uint32_t)idx * RIT_GLYPH_MS;
+      // A short blank tail on each slot separates repeated symbols.
+      if (idx < ritRoundLen() && glyphEl < RIT_GLYPH_MS - 160) {
+        drawRitGlyph(s_ritSeq[idx], 64, 32);
+        oled.setFont(u8g2_font_5x8_tr);
+        drawCenteredF(ritSymWord(s_ritSeq[idx]), 60);
+      }
+      break;
+    }
+
+    case RI_INPUT: {
+      snprintf(hdr, sizeof(hdr), "verse %d of %d - repeat", s_ritRound + 1, RIT_ROUNDS);
+      oled.setFont(u8g2_font_5x8_tr);
+      drawCenteredF(hdr, 8);
+      // One slot per symbol this verse: filled = answered, the next blinks.
+      const int len = ritRoundLen(), bs = 12, gap = 6;
+      int x0 = (128 - (len * bs + (len - 1) * gap)) / 2;
+      for (int i = 0; i < len; i++) {
+        int x = x0 + i * (bs + gap);
+        if (i < s_ritInputIdx) oled.drawBox(x, 26, bs, bs);
+        else {
+          oled.drawFrame(x, 26, bs, bs);
+          if (i == s_ritInputIdx && ((now / 300) & 1))
+            oled.drawFrame(x + 2, 28, bs - 4, bs - 4);
+        }
+      }
+      oled.setFont(u8g2_font_5x8_tr);
+      drawCenteredF("turn or press to answer", 62);
+      break;
+    }
+
+    case RI_GOOD:
+      drawCornerSparkles(now);
+      oled.setFont(u8g2_font_ncenB12_tr);
+      drawCenteredF("Well stirred!", 34);
+      oled.setFont(u8g2_font_5x8_tr);
+      drawCenteredF("the brew deepens...", 56);
+      break;
+
+    case RI_MISS:
+      oled.setFont(u8g2_font_ncenB12_tr);
+      drawCenteredF("It resists!", 34);
+      oled.setFont(u8g2_font_5x8_tr);
+      drawCenteredF("listen again...", 56);
+      break;
+  }
+  oled.sendBuffer();
+}
+
 static const char* menuValueStr(const MenuItem& m, char* buf, int n) {
   switch (m.kind) {
     case K_CHOICE: return m.get ? m.choices[m.get()] : "";
@@ -1028,6 +1406,7 @@ static void render() {
     case ST_IDLE:     renderIdle(now);     break;
     case ST_IDENTIFY: renderIdentify(now); break;
     case ST_STIRRING: renderStirring(now); break;
+    case ST_RITUAL:   renderRitual(now);   break;
     case ST_REVEAL:   renderReveal(now);   break;
     case ST_SETTINGS: renderSettings();    break;
     case ST_DIAG:     renderDiag();        break;
@@ -1249,6 +1628,7 @@ void loop() {
   switch (g_state) {
     case ST_IDENTIFY:
     case ST_STIRRING: updateStir(now, dt, d);     break;
+    case ST_RITUAL:   updateRitual(now, d);       break;  // show -> repeat verses
     case ST_SETTINGS: if (d) updateMenuNav(d);    break;
     case ST_REVEAL:   updateReveal(now);          break;  // ANIM -> NAME -> idle
     default:          break;  // IDLE / DIAG: encoder not navigated

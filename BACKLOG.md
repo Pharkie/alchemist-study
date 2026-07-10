@@ -85,6 +85,24 @@ Two independent moves here — keep them separate:
 
 ---
 
+## Stage 1.5 — Brewing acts (mini-games)
+
+The brewing mechanic now scales with the **act** = bottles seated
+(design + shelved ideas in `docs/MINIGAMES.md`, tuning in `docs/TUNING.md`):
+
+- [x] Act 1 (one bottle): classic capped-add stir (unchanged).
+- [x] Act 2 (two bottles): **"align the essences"** — steer your wave into
+      phase with a drifting ghost wave; the bar fills only while aligned, and
+      the trill doubles as the hot/cold aid.
+- [x] Act 3 (all three = master potion): the **Grand Brew ritual** — a
+      Simon-style incantation of turns/presses (3 verses, lengths 2/3/4)
+      after the stir; finishing goes straight to the reveal.
+- [ ] Future candidates (see `docs/MINIGAMES.md`): attunement dial
+      ("perfect brew" finisher), essence catcher easter egg, alembic balance,
+      wheel of fate, per-realm ritual flavour.
+
+---
+
 ## Stage 2 — Connectivity (deferred, deliberate)
 
 Only start after the bench firmware works end-to-end on hardware. The radio is the
