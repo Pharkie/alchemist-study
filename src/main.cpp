@@ -1025,6 +1025,14 @@ static void renderIdentify(uint32_t now) {
   oled.sendBuffer();
 }
 
+// Power bar shared by the stirring screens — fills with s_stirProgress.
+static void drawPowerBar() {
+  const int bx = 14, by = 41, bw = 100, bh = 10;
+  oled.drawFrame(bx, by, bw, bh);
+  int fill = (int)lroundf((float)(bw - 4) * s_stirProgress);
+  if (fill > 0) oled.drawBox(bx + 2, by + 2, fill, bh - 4);
+}
+
 static void renderStirring(uint32_t now) {
   oled.clearBuffer();
 
@@ -1066,11 +1074,7 @@ static void renderStirring(uint32_t now) {
       drawSparkle(122, wy, sr);
     }
 
-    const int bx = 14, by = 41, bw = 100, bh = 10;
-    oled.drawFrame(bx, by, bw, bh);
-    int fill = (int)lroundf((float)(bw - 4) * s_stirProgress);
-    if (fill > 0) oled.drawBox(bx + 2, by + 2, fill, bh - 4);
-
+    drawPowerBar();
     oled.setFont(u8g2_font_5x8_tr);
     drawCenteredF(s_alignMsg, 62);
     oled.sendBuffer();
@@ -1113,10 +1117,7 @@ static void renderStirring(uint32_t now) {
   }
 
   // Power bar — fills as you stir, drains gently if you pause.
-  const int bx = 14, by = 41, bw = 100, bh = 10;
-  oled.drawFrame(bx, by, bw, bh);
-  int fill = (int)lroundf((float)(bw - 4) * s_stirProgress);
-  if (fill > 0) oled.drawBox(bx + 2, by + 2, fill, bh - 4);
+  drawPowerBar();
 
   oled.setFont(u8g2_font_5x8_tr);
   drawCenteredF(s_stirMsg, 62);

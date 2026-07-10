@@ -15,7 +15,7 @@ Brew incantation — has sub-phases `RI_INTRO → RI_SHOW → RI_INPUT` with
 
 The stirring mechanic branches by **act** (bottles seated) inside
 `updateStir()`: acts 1/3 use the classic capped-add stir, act 2 the
-"align the essences" phase game — see `docs/MINIGAMES.md`.
+"align the essences" phase game — see [MINIGAMES.md](MINIGAMES.md).
 
 ## The four rules
 
