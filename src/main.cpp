@@ -5,9 +5,11 @@
 // potion bottles are seated, an OLED names the resulting potion, a
 // rotary encoder is the "stir" control, and a passive buzzer scores it.
 //
-// State machine: IDLE -> IDENTIFY -> STIRRING (-> RITUAL) -> REVEAL,
-// plus SETTINGS + DIAG.
-//   IDLE      empty base; "Place ingredients" + "Press for settings".
+// State machine: IDLE -> IDENTIFY -> STIRRING (-> RITUAL) -> REVEAL, plus
+// STORY, SETTINGS + DIAG.
+//   IDLE      empty base; a 3-panel home CAROUSEL (Place ingredients /
+//             Begin Quest / Settings) — turn slides smoothly between panels,
+//             press activates the one in view.
 //   IDENTIFY  >=1 bottle seated; features the ingredient name(s) + sparkles.
 //   STIRRING  the brewing mechanic scales with the ACT (= bottles seated):
 //               act 1 (one bottle):  turn to fill the power bar (classic stir).
@@ -16,8 +18,14 @@
 //             when full -> "Press to create" (acts 1-2) or the ritual (act 3).
 //   RITUAL    act 3 (all three = the master potion): the Grand Brew — repeat
 //             a growing incantation of turns/presses (Simon-style) to finish.
+//             Story brews route the finished incantation to storyBrewResolve.
 //   REVEAL    the potion is named with a random animation; auto-returns ~3s.
-//   SETTINGS  press on idle; realm / mute / brightness / stir level / etc.
+//   STORY     the adventure (entered from the carousel's Story Mode panel):
+//             narration cards, two-way choices, and a turn-based battle whose
+//             beats are authored so the player MUST brew a healing potion
+//             (via the real IDENTIFY/STIRRING machinery) to win. Attack
+//             damage is an honest 3D d20 roll. One act for now (Skyrim act 1).
+//   SETTINGS  entered from the home carousel; realm / mute / brightness / etc.
 //   DIAG      built-in hardware test (Settings -> Hardware Test).
 //
 // PLATFORM: arduino-esp32 3.x via pioarduino. Core 3.x is required for
@@ -152,7 +160,7 @@ Preferences prefs;
 static bool g_haveDisplay = false;  // set at boot; if false we run headless
 
 // ---- Runtime state -----------------------------------------------------
-enum State { ST_IDLE, ST_IDENTIFY, ST_STIRRING, ST_RITUAL, ST_REVEAL, ST_SETTINGS, ST_DIAG };
+enum State { ST_IDLE, ST_IDENTIFY, ST_STIRRING, ST_RITUAL, ST_REVEAL, ST_STORY, ST_SETTINGS, ST_DIAG };
 static uint32_t g_now      = 0;            // single time source: millis() sampled once per loop
 static State    g_state    = ST_IDLE;
 static uint32_t g_stateMs  = 0;            // g_now when the current state/phase began
@@ -171,6 +179,287 @@ static bool     s_menuEditing = false;     // true while adjusting the highlight
 static int      s_editVal0    = 0;         // value when the edit began (long-press cancel reverts)
 static int32_t  s_navAccum    = 0;         // encoder accumulator for discrete steps
 static int      s_revealStyle = 0;         // which reveal animation is playing (0..2)
+
+// Home carousel: side-by-side panels on the idle screen, wrapping around at
+// both ends. Turning slides smoothly between them: s_homeX is the viewport's
+// offset into a circular HP_COUNT * PANEL_W strip, eased toward the selected
+// panel along the shortest way round. To add a mode: add an enum entry here
+// and a matching row in kHomePanels (defined with the other panel actions).
+enum HomePanel { HP_PLACE = 0, HP_QUEST, HP_SETTINGS, HP_COUNT };
+static constexpr int PANEL_W = 128;        // each panel is one screen wide
+static int   s_homePanel = HP_PLACE;
+static float s_homeX     = 0.0f;           // scroll offset into the strip (px)
+
+// The current d20 value (1..20): the 3D die's face numbering is rotated so
+// the landing face shows this. Set fresh for every battle attack roll.
+static uint8_t s_questRoll = 14;
+
+// Story mode: a data-driven scene graph + one reusable battle engine.
+// A story is a TABLE of StoryNodes — cards, choices, battles, an end marker —
+// linked by successor indices, so acts and universes are pure data. Choices
+// may set bits in a generic flag set; later nodes read those bits back
+// (a battle can grant the enemy first strike, the brew screen can surface an
+// earned hint) — fold-back branching with no bespoke state per story.
+//
+// The battle engine: player dice are ALWAYS honest (never fudged); what's
+// authored is the enemy's behaviour — its CRIT_ON_BITE'th bite always drops
+// the player to CRIT_HP and numbs the sword arm (attacking numb is fatal),
+// forcing the brew the fight demands. Brewing consumes a turn: the enemy
+// still bites while you're at the cauldron. Enemy HP must exceed two
+// attacks' max damage (2 x 7 = 14) so the crit lands before the enemy can
+// die, and stay low enough that honest post-heal rolls finish within a turn
+// or two.
+// N_BREW is a story-level brew (outside any battle): the node's `battle` def
+// supplies only the brew fields (title/combo/hint); success advances to
+// nextA. A wrong potion is named and re-tried at leisure — UNLESS the node
+// sets nextB, which makes the brew ONE-SHOT: the wrong pour routes there
+// (the final exam pattern — the player who followed the clues brews right).
+enum NodeKind { N_CARD, N_SPEAK, N_CHOICE, N_TUNE, N_SCENE, N_BREW, N_BATTLE, N_END };
+
+struct BattleDef {
+  const char* name;       // HP bar label
+  const char* intro;      // opening message
+  void (*sprite)(int cx, int cy, uint32_t now);  // idle animation
+  int         enemyHP;    // see the crit-maths note above
+  int         bite;       // enemy damage per turn
+  uint8_t     brewCombo;  // the combo the fight demands
+  const char* brewTitle;  // brew screen title bar
+  const char* hint;       // recipe hint on the brew screen...
+  uint8_t     hintFlag;   // ...shown if this flag was earned (0 = always)
+  uint8_t     firstStrikeFlag;   // enemy acts first if this flag is set (0 = never)
+};
+
+struct StoryNode {
+  NodeKind    kind;
+  const char* title;      // card title / choice prompt / N_SPEAK speaker / N_TUNE caption
+  const char* body;       // card body / speech (fit: ~22 chars/line, max 4 lines)
+  const char* optA, *optB;   // choice options (bottom spinner; wraps to 2 lines)
+  uint8_t     nextA;      // card/speak/tune press / choice A / battle WIN / scene end
+  uint8_t     nextB;      // choice B / battle KO
+  uint8_t     setFlag;    // N_CHOICE: flag bits set by choosing option B
+  int8_t      heal;       // HP restored on ENTERING this node (99 = to full);
+                          // a card that heals also shows the animated HP bar
+  int8_t      costA, costB;  // N_CHOICE: gold cost per option (refused if broke)
+  uint16_t    ms;         // N_SCENE: play this long, then auto-advance
+  void (*art)(int cx, int cy, uint32_t now);  // N_SPEAK portrait / N_TUNE / N_SCENE
+  const BattleDef* battle;   // N_BATTLE
+};
+
+enum BattlePhase { BP_INTRO, BP_CHOOSE, BP_ROLL, BP_HIT, BP_BITE, BP_MAULED,
+                   BP_BREW_OK, BP_BREW_BAD };
+static const StoryNode* s_story = nullptr;  // the active script
+static int         s_node  = 0;             // current node index
+static uint8_t     s_flags = 0;             // choice-outcome bits
+static const BattleDef* s_bdef = nullptr;   // active battle definition
+static BattlePhase s_bp    = BP_INTRO;
+static bool     s_storyBrew = false;  // brewing inside the story (real IDENTIFY/STIRRING)
+static bool     s_numb      = false;  // post-crit: attacking is fatal, must brew
+static bool     s_healed    = false;  // brewed successfully THIS battle (skips the crit)
+static int      s_choiceIdx = 0;      // option showing on the choice spinner
+static int      s_php = 0, s_ehp = 0; // battle hit points (player / enemy)
+static int      s_gold = 0;           // the purse — inventory system v0 (gold only)
+static int      s_biteN = 0;          // enemy bites landed (CRIT_ON_BITE'th = the crit)
+static char     s_bmsg[64] = "";      // battle message line
+static Universe s_prevUniverse = UNI_SKYRIM;   // restored when the story ends
+static constexpr int PLAYER_MAX_HP   = 30;
+static constexpr int STORY_START_GOLD = 7;
+static constexpr int CRIT_ON_BITE  = 2;   // this bite is the crit (unless already
+static constexpr int CRIT_HP       = 6;   // brewed) and leaves the player here
+// Cross-app reading minimum: every TIMED message holds a base beat plus
+// reading time (~18 chars/sec). Press-gated screens don't need it; anything
+// that auto-advances does — never flash text a reader can't finish.
+static uint32_t readHoldMs(const char* s) {
+  return 900 + (uint32_t)strlen(s) * 55;
+}
+// The attack roll is a full-screen pinball cutaway: tumble in -> zoom onto
+// the face -> hold the landed number, then the damage resolves.
+static constexpr uint32_t ROLL_TUMBLE_MS = 1100;
+static constexpr uint32_t ROLL_ZOOM_MS   = 600;
+static constexpr uint32_t BATTLE_ROLL_MS = 2400;  // total (the rest is the hold)
+static constexpr float    HP_DRAIN_RATE  = 20.0f; // shown HP eases at this many HP/sec
+static float s_phpShown = 0.0f, s_ehpShown = 0.0f; // animated bar values
+
+// --- Skyrim Act 1 script. More acts append nodes; other universes get their
+// own tables (storyBegin picks). Everything story-specific lives HERE.
+// Act 1's beats: the road/Jarl choice -> the rat battle (forced healing
+// brew) -> the inn (spend coin on mead or a sweetroll, then play the lute
+// and/or sleep by the fire) -> act 2 tease.
+static void drawRat(int cx, int cy, uint32_t now);      // sprites & scenes,
+static void drawJarl(int cx, int cy, uint32_t now);     // defined with the
+static void drawHealer(int cx, int cy, uint32_t now);   // rest of the art
+static void drawSteward(int cx, int cy, uint32_t now);
+static void drawLuteNotes(int cx, int cy, uint32_t now);
+static void drawCampfire(int cx, int cy, uint32_t now);
+static void drawSneak(int cx, int cy, uint32_t now);
+
+enum { SF_JARL = 0x01 };   // saw the Jarl: hint earned, but ambushed at dusk
+
+static const BattleDef kBtRat = {
+  "Rat", "Why is this rat so big? Something unnatural here", drawRat,
+  15, 7,
+  1,                                   // 001 = Blue Mountain Flower = Minor Healing
+  "Brew: healing potion",
+  "'blue mountain flower mends flesh'", SF_JARL,
+  SF_JARL,
+};
+
+// Brew-only defs (no battle fields used): N_BREW nodes borrow just the
+// title/combo/hint. Hints always show, per the recipe-seeding rule.
+static const BattleDef kBrewGoblet = {
+  nullptr, nullptr, nullptr, 0, 0,
+  3,                                   // 011 = Flower + Deathbell = Lingering Damage Poison
+  "Brew: lingering poison",
+  "'deathbell bound to the flower'", 0,
+  0,
+};
+static const BattleDef kBrewPhantom = {
+  nullptr, nullptr, nullptr, 0, 0,
+  7,                                   // 111 = all three = Philter of the Phantom
+  "Brew: the Philter",
+  "'all three bottles as one'", 0,
+  0,
+};
+static const BattleDef kBrewCounter = {
+  nullptr, nullptr, nullptr, 0, 0,
+  1,                                   // 001 = the flower — act 1's first recipe
+  "Brew: the counter",
+  // The final exam: the hint asks the QUESTION; the answer was the Jarl's
+  // act 1 line, re-planted as the Afflicted's taunt on the cauldron card.
+  "'what quenches a plague?'", 0,
+  0,
+};
+
+// Node fields: kind, title, body, optA, optB, nextA, nextB, setFlag,
+//              heal, costA, costB, ms, art, battle
+static const StoryNode kStorySkyrim[] = {
+  /*0 intro  */ { N_CARD, "The Alchemist's Quest",   // plants the grain (act 2)
+                  "Whiterun sickens. Even the bread tastes wrong. The Jarl summons you.",
+                  nullptr, nullptr, 1, 0, 0, 0, 0, 0, 0, nullptr, nullptr },
+  /*1 choice */ { N_CHOICE, "How do you begin?", nullptr,
+                  "Take the road", "Request audience with Jarl",
+                  2, 3, SF_JARL, 0, 0, 0, 0, nullptr, nullptr },
+  /*2 road   */ { N_CARD, "The Road",
+                  "You take the road. In the tall grass, something stirs...",
+                  nullptr, nullptr, 4, 0, 0, 0, 0, 0, 0, nullptr, nullptr },
+  /*3 jarl   */ { N_SPEAK, "Jarl Balgruuf",   // bubble fits ~15 chars x 4 lines;
+                  // recipe hint + the intrigue seed (act 2) in nine words
+                  "Blue mountain flower mends flesh. Trust no one here.",
+                  nullptr, nullptr, 4, 0, 0, 0, 0, 0, 0, drawJarl, nullptr },
+  /*4 battle */ { N_BATTLE, nullptr, nullptr, nullptr, nullptr,
+                  5, 6, 0, 0, 0, 0, 0, nullptr, &kBtRat },
+  /*5 won    */ { N_CARD, "Victory!",   // press-gated clue: the rat ATE poison
+                  "The rat lies dead - gums black with deathbell. Whiterun's gates ahead.",
+                  nullptr, nullptr, 7, 0, 0, 0, 0, 0, 0, nullptr, nullptr },
+  /*6 ko     */ { N_CARD, "Knocked Out",
+                  "Darkness takes you... You wake by the roadside. Try again.",
+                  nullptr, nullptr, 4, 0, 0, 0, 0, 0, 0, nullptr, nullptr },
+  /*7 inn    */ { N_CARD, "The Bannered Mare",
+                  "The innkeep eyes your purse. A hot meal or a drink?",
+                  nullptr, nullptr, 8, 0, 0, 0, 0, 0, 0, nullptr, nullptr },
+  /*8 buy    */ { N_CHOICE, "Spend your coin on...", nullptr,
+                  "Nord mead: -3gp, +10HP", "Sweetroll: -5gp, +15HP",
+                  9, 10, 0, 0, 3, 5, 0, nullptr, nullptr },
+  /*9 mead   */ { N_CARD, "Nord Mead",
+                  "It warms you to the toes.",
+                  nullptr, nullptr, 11, 0, 0, 10, 0, 0, 0, nullptr, nullptr },
+  /*10 sweet */ { N_CARD, "Sweetroll",
+                  "Sweet as victory - and no thief in sight.",
+                  nullptr, nullptr, 11, 0, 0, 15, 0, 0, 0, nullptr, nullptr },
+  /*11 rest  */ { N_CHOICE, "The fire burns low...", nullptr,
+                  "Play the lute", "Go to sleep",
+                  12, 13, 0, 0, 0, 0, 0, nullptr, nullptr },
+  /*12 lute  */ { N_TUNE, "You strum an old tune",   // loops until pressed
+                  nullptr, nullptr, nullptr, 11, 0, 0, 0, 0, 0, 0,
+                  drawLuteNotes, nullptr },
+  /*13 fire  */ { N_SCENE, nullptr, nullptr, nullptr, nullptr,   // pan + hold
+                  14, 0, 0, 0, 0, 0, 6500, drawCampfire, nullptr },
+  /*14 awake */ { N_CARD, "Act 2",   // the wound walks into act 2 (max 2 lines)
+                  "You wake healed. Yet the rat bite weeps...",
+                  nullptr, nullptr, 16, 0, 0, 99, 0, 0, 0, nullptr, nullptr },
+  /*15 end   */ { N_END, nullptr, nullptr, nullptr, nullptr,
+                  0, 0, 0, 0, 0, 0, 0, nullptr, nullptr },
+
+  // ---- Act 2: The Steward's Goblet --------------------------------------
+  /*16 diagnose*/ { N_SPEAK, "Healer Danica",   // the bite names the poison
+                  "Deathbell rot. No rat carries this. Something FED it.",
+                  nullptr, nullptr, 17, 0, 0, 0, 0, 0, 0, drawHealer, nullptr },
+  /*17 granary*/ { N_CARD, "The Granary",       // the poison names the man
+                  "Black petals in the grain. One man holds the key: the steward.",
+                  nullptr, nullptr, 18, 0, 0, 0, 0, 0, 0, nullptr, nullptr },
+  /*18 recipe */ { N_SPEAK, "Healer Danica",    // act 2 recipe, spoken first
+                  "Deathbell kills quick. Bound to the flower, pain LINGERS.",
+                  nullptr, nullptr, 19, 0, 0, 0, 0, 0, 0, drawHealer, nullptr },
+  /*19 choice */ { N_CHOICE, "The steward...", nullptr,
+                  "Confront him", "Watch the granary",
+                  20, 21, 0, 0, 0, 0, 0, nullptr, nullptr },
+  /*20 denial */ { N_CARD, "Denial",
+                  "'Prove it,' he smiles. Now he knows you know. The feast is your chance.",
+                  nullptr, nullptr, 22, 0, 0, 0, 0, 0, 0, nullptr, nullptr },
+  /*21 midnight*/{ N_CARD, "Midnight",
+                  "Black petals fall from his sleeve into the grain. Now catch him publicly.",
+                  nullptr, nullptr, 22, 0, 0, 0, 0, 0, 0, nullptr, nullptr },
+  /*22 feast  */ { N_CARD, "The Feast",
+                  "Tonight the steward pours for the Jarl's table. Your chance.",
+                  nullptr, nullptr, 23, 0, 0, 0, 0, 0, 0, nullptr, nullptr },
+  /*23 brew   */ { N_BREW, nullptr, nullptr, nullptr, nullptr,
+                  24, 0, 0, 0, 0, 0, 0, nullptr, &kBrewGoblet },
+  /*24 use    */ { N_CHOICE, "At the feast:", nullptr,
+                  "Lace his goblet", "Draw your blade",
+                  26, 25, 0, 0, 0, 0, 0, nullptr, nullptr },
+  /*25 seized */ { N_CARD, "Seized!",          // the blade is the trap here
+                  "Guards see only a drawn blade. A cold night in the cells.",
+                  nullptr, nullptr, 24, 0, 0, 0, 0, 0, 0, nullptr, nullptr },
+  /*26 goblet */ { N_CARD, "The Goblet",
+                  "He drinks - and blackens. The hall gasps. Dying, he laughs...",
+                  nullptr, nullptr, 27, 0, 0, 0, 0, 0, 0, nullptr, nullptr },
+  /*27 dying  */ { N_SPEAK, "The Steward",     // dying words name his master
+                  "You fools! Peryite avenges his loyal servants!",
+                  nullptr, nullptr, 28, 0, 0, 0, 0, 0, 0, drawSteward, nullptr },
+  /*28 peryite*/ { N_CARD, "Peryite",          // stakes go realm-wide
+                  "Plague god. His shrine smokes in the mountains. Act 3 awaits...",
+                  nullptr, nullptr, 29, 0, 0, 0, 0, 0, 0, nullptr, nullptr },
+
+  // ---- Act 3: The Cauldron -----------------------------------------------
+  /*29 shrine */ { N_CARD, "The Shrine",
+                  "Green smoke crowns the shrine. The Afflicted guard every path.",
+                  nullptr, nullptr, 30, 0, 0, 0, 0, 0, 0, nullptr, nullptr },
+  /*30 recipe */ { N_SPEAK, "Healer Danica",   // act 3 recipe, spoken first
+                  "The Philter hides you. ALL THREE bottles, alchemist.",
+                  nullptr, nullptr, 31, 0, 0, 0, 0, 0, 0, drawHealer, nullptr },
+  /*31 philter*/ { N_BREW, nullptr, nullptr, nullptr, nullptr,
+                  32, 0, 0, 0, 0, 0, 0, nullptr, &kBrewPhantom },
+  /*32 sneak  */ { N_SCENE, nullptr, nullptr, nullptr, nullptr,   // invisible
+                  33, 0, 0, 0, 0, 0, 5600, drawSneak, nullptr },
+  /*33 cauldron*/{ N_CARD, "The Cauldron",     // the taunt IS the clue
+                  "It seethes. The Afflicted chant: 'No flower mends THIS.' One pour - one chance.",
+                  nullptr, nullptr, 34, 0, 0, 0, 0, 0, 0, nullptr, nullptr },
+  /*34 use    */ { N_CHOICE, "The great cauldron:", nullptr,
+                  "Tip it over", "Counter-brew it",
+                  35, 36, 0, 0, 0, 0, 0, nullptr, nullptr },
+  /*35 spilled*/ { N_CARD, "Spilled!",         // force is the trap, one last time
+                  "It floods the floor - the mist rises hungry. You flee to try again.",
+                  nullptr, nullptr, 34, 0, 0, 0, 0, 0, 0, nullptr, nullptr },
+  /*36 counter*/ { N_BREW, nullptr, nullptr, nullptr, nullptr,   // ONE SHOT:
+                  37, 41, 0, 0, 0, 0, 0, nullptr, &kBrewCounter },  // wrong -> 41
+  /*37 poured */ { N_CARD, "The Counter-Brew", // act 1's flower saves the realm
+                  "The flower falls in. The cauldron clears... Peryite SCREAMS.",
+                  nullptr, nullptr, 38, 0, 0, 0, 0, 0, 0, nullptr, nullptr },
+  /*38 saved  */ { N_CARD, "Realm Saved",
+                  "Skyrim drinks clean. The Jarl names you Alchemist of Whiterun.",
+                  nullptr, nullptr, 39, 0, 0, 99, 0, 0, 0, nullptr, nullptr },
+  /*39 jarl   */ { N_SPEAK, "Jarl Balgruuf",   // the act 1 line, paid off
+                  "You mended more than flesh. Skyrim owes you, alchemist.",
+                  nullptr, nullptr, 40, 0, 0, 0, 0, 0, 0, drawJarl, nullptr },
+  /*40 the end*/ { N_CARD, "The End",          // and a tease for other realms
+                  "Your study glows warm. Seven realms await new tales...",
+                  nullptr, nullptr, 15, 0, 0, 0, 0, 0, 0, nullptr, nullptr },
+  /*41 wrong  */ { N_CARD, "The Wrong Brew",   // the exam, failed
+                  "The cauldron drinks it - and ROARS. The mist pours into the night.",
+                  nullptr, nullptr, 42, 0, 0, 0, 0, 0, 0, nullptr, nullptr },
+  /*42 bad end*/ { N_CARD, "Bad Ending",       // fail forward: whisper the clue
+                  "Skyrim's rivers run grey. Remember the Jarl's words... and try again.",
+                  nullptr, nullptr, 15, 0, 0, 0, 0, 0, 0, nullptr, nullptr },
+};
 
 // reed debounce / latch
 static uint8_t  s_rawComboLast = 0;
@@ -269,7 +558,7 @@ struct Note { uint16_t freq; uint16_t durMs; };  // freq 0 = rest
 static const Note MEL_SUCCESS[]  = { {523, 90}, {659, 90}, {784, 90}, {1047, 150} };
 static const Note MEL_TOGGLE[]   = { {700, 110}, {1100, 150} };   // distinct two-note
 static const Note MEL_NOTREADY[] = { {200, 70}, {0, 50}, {200, 70} }; // low "nope"
-
+static const Note MEL_TICK[]     = { {1175, 12} };                // carousel detent tick
 // Ritual voices. Each incantation symbol has its own note, so the sequence can
 // be memorised by ear as well as by eye (and answers echo the same note back).
 static const Note MEL_SYM_CW[]    = { {880, 240} };               // turn right = high
@@ -277,6 +566,24 @@ static const Note MEL_SYM_CCW[]   = { {392, 240} };               // turn left  
 static const Note MEL_SYM_PRESS[] = { {587, 240} };               // press      = mid
 static const Note MEL_RITBEGIN[]  = { {330, 140}, {392, 140}, {494, 220} }; // mystic rise
 static const Note MEL_RITGOOD[]   = { {659, 90}, {880, 150} };    // verse complete
+// Dice rattle: descending "thuds" roughly aligned with the tumble's bounces
+// (impacts near t = 0, 1/3, 2/3, 1 of QUEST_TUMBLE_MS).
+static const Note MEL_DICE_RATTLE[] = {
+  {1900, 20}, {0, 447}, {1700, 25}, {0, 442}, {1500, 30}, {0, 437}, {1300, 35}
+};
+static const Note MEL_DICE_FANFARE[] = { {659, 80}, {784, 80}, {988, 80}, {1319, 220} };
+// Battle beats: a low bite thud, a nastier crit, and a falling KO dirge.
+static const Note MEL_BITE[] = { {170, 90}, {120, 140} };
+static const Note MEL_CRIT[] = { {200, 90}, {150, 90}, {100, 220} };
+static const Note MEL_KO[]   = { {392, 160}, {330, 160}, {262, 160}, {196, 320} };
+// The lute: a slow, melancholy folk air in the Dorian mode (looped while the
+// N_TUNE node is up) — firelight music, not a jig.
+static const Note MEL_LUTE[] = {
+  {330, 400}, {392, 400}, {440, 650}, {392, 400}, {440, 400}, {523, 650},
+  {494, 400}, {440, 850}, {0, 250},
+  {523, 400}, {587, 400}, {659, 650}, {587, 400}, {523, 400}, {440, 650},
+  {392, 400}, {330, 400}, {440, 1100}, {0, 500},
+};
 
 static const Note* s_melody     = nullptr;
 static uint8_t      s_melodyLen = 0;
@@ -393,7 +700,10 @@ static void enterCombo(uint8_t c) {
   s_stirReady = false;
   s_baseEmptied = false;
   s_stirCps = 0; s_rateAcc = 0; s_rateWinMs = g_now;   // no stale rate carry-over
-  enterState(c == 0 ? ST_IDLE : ST_IDENTIFY);
+  if (c == 0) { s_homePanel = HP_PLACE; s_homeX = 0.0f; }  // fresh idle: panel 1
+  // During a story brew an empty base just waits for ingredients (the story
+  // owns the exits) — everywhere else an empty base means idle.
+  enterState(c == 0 ? (s_storyBrew ? ST_IDENTIFY : ST_IDLE) : ST_IDENTIFY);
   // Print MSB-first (slot3 slot2 slot1) to match the spec's "100 Nightshade".
   Serial.printf("[combo] %u%u%u (val %u) -> %s\n",
                 (c >> 2) & 1, (c >> 1) & 1, (c >> 0) & 1,
@@ -411,11 +721,12 @@ static void enterCombo(uint8_t c) {
 static void onSensedComboChange() {
   uint8_t raw = s_sensedCombo;
 
-  // Menus own the screen and ignore the base entirely; whatever is seated is
-  // resynced on exit (settingsExit and the reveal end call enterCombo with
-  // the sensed combo). REVEAL falls through to the latch logic below, so a
-  // flaky reed still can't disrupt it but a genuinely added bottle restarts.
-  if (g_state == ST_SETTINGS || g_state == ST_DIAG) return;
+  // Menus (and the quest dice roll) own the screen and ignore the base
+  // entirely; whatever is seated is resynced on exit (settingsExit, questExit
+  // and the reveal end call enterCombo with the sensed combo). REVEAL falls
+  // through to the latch logic below, so a flaky reed still can't disrupt it
+  // but a genuinely added bottle restarts.
+  if (g_state == ST_SETTINGS || g_state == ST_DIAG || g_state == ST_STORY) return;
 
   if (raw == 0) {                    // base emptied: latch it; never bail instantly
     s_baseEmptied = true;
@@ -431,6 +742,403 @@ static void onSensedComboChange() {
   // STIRRING / RITUAL / REVEAL: latched — only a new arrangement restarts.
   bool addedNew = (raw & ~g_combo) != 0;
   if (s_baseEmptied || addedNew) enterCombo(raw);
+}
+
+// ---- Story mode (ST_STORY) -----------------------------------------------
+static int navSteps(int32_t d);   // defined with the settings model below
+
+// Phase/node transitions re-stamp g_stateMs, per the architecture rules.
+static void battlePhase(BattlePhase p) {
+  s_bp = p;
+  g_stateMs = g_now;
+  if (p == BP_CHOOSE) s_choiceIdx = s_numb ? 1 : 0;  // nudge toward the potion
+}
+
+static void battleReset() {
+  s_php = PLAYER_MAX_HP;
+  s_ehp = s_bdef->enemyHP;
+  s_phpShown = (float)s_php;   // bars start full, no drain-in
+  s_ehpShown = (float)s_ehp;
+  s_biteN = 0;
+  s_numb = false;
+  s_healed = false;
+  snprintf(s_bmsg, sizeof(s_bmsg), "%s", s_bdef->intro);
+  s_bp = BP_INTRO;
+}
+
+// Story over (won or abandoned): restore the realm, resync to the base; if
+// that lands on idle, stay on the carousel's Story panel.
+static void storyEnd() {
+  g_universe = s_prevUniverse;
+  s_storyBrew = false;
+  enterCombo(s_sensedCombo);
+  if (g_state == ST_IDLE) { s_homePanel = HP_QUEST; s_homeX = (float)(PANEL_W * HP_QUEST); }
+}
+
+// THE story-graph step: enter a node by index. Battles arm themselves from
+// their BattleDef; brews hand straight off to the cauldron; an entry heal
+// applies (and its card shows the bar rising); the end marker routes home.
+static void storyBrewStart();
+static void storyGoto(int idx) {
+  s_node = idx;
+  g_stateMs = g_now;
+  const StoryNode& n = s_story[idx];
+  if (n.heal) {
+    s_php += n.heal;                       // 99 = "restore to full" in practice
+    if (s_php > PLAYER_MAX_HP) s_php = PLAYER_MAX_HP;
+  }
+  if      (n.kind == N_BATTLE) { s_bdef = n.battle; battleReset(); }
+  else if (n.kind == N_BREW)   { s_bdef = n.battle; storyBrewStart(); }
+  else if (n.kind == N_CHOICE) s_choiceIdx = 0;
+  else if (n.kind == N_END)    storyEnd();
+}
+
+// The story plays in Skyrim for now regardless of the chosen realm (only a
+// Skyrim script exists); the realm is restored on exit and NVS never touched.
+// When more universes get scripts, pick the table by g_universe here.
+static void storyBegin() {
+  s_navAccum = 0;
+  s_prevUniverse = g_universe;
+  g_universe = UNI_SKYRIM;
+  s_flags = 0;
+  s_gold = STORY_START_GOLD;
+  s_php = PLAYER_MAX_HP;
+  s_phpShown = (float)s_php;
+  s_storyBrew = false;
+  s_story = kStorySkyrim;
+  enterState(ST_STORY);
+  storyGoto(0);
+}
+
+// The enemy's turn. Authored beat: the CRIT_ON_BITE'th bite is the crit that
+// drops the player to CRIT_HP and numbs the sword arm — UNLESS they already
+// brewed this battle. An early brewer has engaged the potion mechanic, so
+// they fight it out on attrition instead (worst-case all-minimum rolls still
+// win at 2 HP); without this the crit would land right after a spent heal
+// and the "forced brew" beat became a death sentence.
+static void doBite() {
+  s_biteN++;
+  if (s_biteN == CRIT_ON_BITE && !s_healed) {
+    s_php = CRIT_HP;
+    s_numb = true;
+    snprintf(s_bmsg, sizeof(s_bmsg), "CRIT! The bite FESTERS! Your arm goes numb...");
+    startMelody(MEL_CRIT, ARRAY_COUNT(MEL_CRIT), g_now);
+  } else {
+    s_php -= s_bdef->bite;
+    if (s_php < 0) s_php = 0;
+    snprintf(s_bmsg, sizeof(s_bmsg), "%s bites for %d!", s_bdef->name, s_bdef->bite);
+    startMelody(MEL_BITE, ARRAY_COUNT(MEL_BITE), g_now);
+  }
+  battlePhase(BP_BITE);
+}
+
+static void chooseAttack() {
+  if (s_numb) {                    // the lesson: you cannot fight this off
+    s_php = 0;
+    snprintf(s_bmsg, sizeof(s_bmsg), "Your numb arm fails! You are savaged!");
+    startMelody(MEL_CRIT, ARRAY_COUNT(MEL_CRIT), g_now);
+    battlePhase(BP_MAULED);
+    return;
+  }
+  s_questRoll = (uint8_t)(1 + esp_random() % 20);   // always an honest roll
+  startMelody(MEL_DICE_RATTLE, ARRAY_COUNT(MEL_DICE_RATTLE), g_now);
+  battlePhase(BP_ROLL);
+}
+
+// Hand the screen to the real brew machinery (IDENTIFY/STIRRING) with the
+// story flag up; onShortPress routes the finished stir back here.
+static void storyBrewStart() {
+  s_storyBrew = true;
+  s_bmsg[0] = '\0';                        // clear any wrong-potion note
+  enterCombo(s_sensedCombo);
+}
+
+static void storyBrewResolve() {
+  const StoryNode& n = s_story[s_node];
+  bool ok = (g_combo == s_bdef->brewCombo);
+  Serial.printf("[story] brew %s (combo %u)\n", ok ? "OK" : "wrong", g_combo);
+
+  if (n.kind == N_BREW) {
+    if (ok) {
+      s_storyBrew = false;
+      startMelody(MEL_SUCCESS, ARRAY_COUNT(MEL_SUCCESS), g_now);
+      enterState(ST_STORY);
+      storyGoto(n.nextA);
+    } else if (n.nextB) {                  // one-shot brew: the wrong pour lands
+      s_storyBrew = false;
+      startMelody(MEL_KO, ARRAY_COUNT(MEL_KO), g_now);
+      enterState(ST_STORY);
+      storyGoto(n.nextB);
+    } else {                               // ordinary story brew: retry at leisure
+      snprintf(s_bmsg, sizeof(s_bmsg), "That was %s!",
+               kPotions[g_universe][g_combo]);
+      startMelody(MEL_NOTREADY, ARRAY_COUNT(MEL_NOTREADY), g_now);
+      enterCombo(s_sensedCombo);           // reset the stir, stay at the cauldron
+    }
+    return;
+  }
+
+  // Battle brew: consumes the turn either way; the enemy still bites.
+  s_storyBrew = false;
+  enterState(ST_STORY);
+  if (ok) {
+    s_php = PLAYER_MAX_HP;
+    s_numb = false;
+    s_healed = true;                       // mechanic engaged: no scripted crit
+    snprintf(s_bmsg, sizeof(s_bmsg), "The draught mends you! Strength returns.");
+    startMelody(MEL_SUCCESS, ARRAY_COUNT(MEL_SUCCESS), g_now);
+    battlePhase(BP_BREW_OK);
+  } else {
+    snprintf(s_bmsg, sizeof(s_bmsg), "You made %s! No use here.",
+             kPotions[g_universe][g_combo]);
+    startMelody(MEL_NOTREADY, ARRAY_COUNT(MEL_NOTREADY), g_now);
+    battlePhase(BP_BREW_BAD);
+  }
+}
+
+// Backing out of the cauldron with nothing seated: in a battle it costs no
+// turn; a story brew (N_BREW) is the road forward, so there's no backing out.
+static void storyBrewCancel() {
+  if (s_story[s_node].kind == N_BREW) return;
+  s_storyBrew = false;
+  enterState(ST_STORY);
+  battlePhase(BP_CHOOSE);
+}
+
+// ---- Reveal kick-off (shared by the press path and the ritual) ----------
+static void startReveal(uint32_t now) {
+  s_revealPhase = RP_ANIM;
+  s_revealStyle = (int)(esp_random() % 3);   // pick a random reveal animation
+  enterState(ST_REVEAL);                     // stamps the phase clock
+  startMelody(MEL_SUCCESS, ARRAY_COUNT(MEL_SUCCESS), now);
+  Serial.printf("[reveal] %s\n", kPotions[g_universe][g_combo]);
+}
+
+// ---- Act 3: the Grand Brew ritual ---------------------------------------
+// All three essences demand more than stirring: after the bar fills, the brew
+// speaks a growing incantation of glyphs (turn right / turn left / press) and
+// you must repeat it back. RIT_ROUNDS verses, each a longer prefix of the same
+// RIT_SEQ_LEN-symbol sequence (classic Simon). A wrong answer just replays the
+// verse — the master potion should feel earned, not punishing. Inside a story
+// brew the finished incantation hands to storyBrewResolve, not the reveal.
+
+static int ritRoundLen() { return s_ritRound + 2; }   // verse lengths 2, 3, 4
+
+static void playSymTone(uint8_t sym, uint32_t now) {
+  switch (sym) {
+    case SYM_CW:  startMelody(MEL_SYM_CW,  ARRAY_COUNT(MEL_SYM_CW),  now); break;
+    case SYM_CCW: startMelody(MEL_SYM_CCW, ARRAY_COUNT(MEL_SYM_CCW), now); break;
+    default:      startMelody(MEL_SYM_PRESS, ARRAY_COUNT(MEL_SYM_PRESS), now); break;
+  }
+}
+
+// Begin (or replay) the current verse's SHOW phase. Re-stamps the phase clock;
+// glyph i sounds/draws during elapsed [i*RIT_GLYPH_MS, (i+1)*RIT_GLYPH_MS).
+static void ritShowBegin(uint32_t now) {
+  s_ritPhase = RI_SHOW;
+  g_stateMs = now;
+  s_ritShowIdx = -1;
+  s_ritInputIdx = 0;
+  s_ritAccum = 0;
+}
+
+static void ritualEnter(uint32_t now) {
+  for (int i = 0; i < RIT_SEQ_LEN; i++) s_ritSeq[i] = (uint8_t)(esp_random() % 3);
+  s_ritRound = 0;
+  s_ritPhase = RI_INTRO;
+  enterState(ST_RITUAL);
+  startMelody(MEL_RITBEGIN, ARRAY_COUNT(MEL_RITBEGIN), now);
+  Serial.println("[ritual] the Grand Brew begins");
+}
+
+// One answer (turn or press) during RI_INPUT. Echoes the symbol's note, then
+// advances the verse, finishes the ritual, or flags a miss.
+static void ritInput(uint8_t sym, uint32_t now) {
+  if (s_ritPhase != RI_INPUT) return;
+  playSymTone(sym, now);
+  if (sym != s_ritSeq[s_ritInputIdx]) {
+    s_ritPhase = RI_MISS;
+    g_stateMs = now;
+    startMelody(MEL_NOTREADY, ARRAY_COUNT(MEL_NOTREADY), now);
+    return;
+  }
+  s_ritInputIdx++;
+  g_stateMs = now;                      // each answer refreshes the stall timeout
+  if (s_ritInputIdx < ritRoundLen()) return;
+  if (s_ritRound >= RIT_ROUNDS - 1) {   // incantation complete
+    if (s_storyBrew) storyBrewResolve();   // the story judges the brew
+    else startReveal(now);
+  } else {
+    s_ritPhase = RI_GOOD;
+    g_stateMs = now;
+    startMelody(MEL_RITGOOD, ARRAY_COUNT(MEL_RITGOOD), now);
+  }
+}
+
+static void updateRitual(uint32_t now, int32_t d) {
+  uint32_t el = now - g_stateMs;
+  switch (s_ritPhase) {
+    case RI_INTRO:
+      if (el >= RIT_INTRO_MS) ritShowBegin(now);
+      break;
+    case RI_SHOW: {
+      int idx = (int)(el / RIT_GLYPH_MS);
+      int len = ritRoundLen();
+      if (idx < len && idx != s_ritShowIdx) {
+        s_ritShowIdx = idx;
+        playSymTone(s_ritSeq[idx], now);
+      }
+      if (idx >= len) {                 // verse spoken -> your turn
+        s_ritPhase = RI_INPUT;
+        g_stateMs = now;
+        s_ritInputIdx = 0;
+        s_ritAccum = 0;
+      }
+      break;
+    }
+    case RI_INPUT:
+      if (d != 0) {
+        // A direction flip clears the accumulator so jiggle can't add up.
+        if ((d > 0 && s_ritAccum < 0) || (d < 0 && s_ritAccum > 0)) s_ritAccum = 0;
+        s_ritAccum += d;
+        if      (s_ritAccum >=  RIT_TURN_COUNTS) { s_ritAccum = 0; ritInput(SYM_CW,  now); }
+        else if (s_ritAccum <= -RIT_TURN_COUNTS) { s_ritAccum = 0; ritInput(SYM_CCW, now); }
+      }
+      if (now - g_stateMs >= RIT_INPUT_TIMEOUT_MS) ritShowBegin(now);  // lost? hear it again
+      break;
+    case RI_GOOD:
+      if (el >= RIT_GOOD_MS) { s_ritRound++; ritShowBegin(now); }
+      break;
+    case RI_MISS:
+      if (el >= RIT_MISS_MS) ritShowBegin(now);
+      break;
+  }
+}
+
+// Turning only matters when a choice spinner is on screen: each detent
+// cycles the option shown on the bottom line (either direction works).
+static void storyNav(int32_t d) {
+  const StoryNode& n = s_story[s_node];
+  bool choosing = (n.kind == N_CHOICE) ||
+                  (n.kind == N_BATTLE && s_bp == BP_CHOOSE);
+  if (!choosing) return;
+  int steps = navSteps(d);
+  if (steps) s_choiceIdx = ((s_choiceIdx + steps) % 2 + 2) % 2;
+}
+
+static void storyPress() {
+  const StoryNode& n = s_story[s_node];
+  switch (n.kind) {
+    case N_CARD:
+    case N_SPEAK:
+      storyGoto(n.nextA);
+      break;
+    case N_TUNE:
+      s_melodyActive = false;                // stop strumming mid-bar
+      noTone(PIN_BUZZER);
+      storyGoto(n.nextA);
+      break;
+    case N_SCENE:
+      storyGoto(n.nextA);                    // impatient? skip the cinematic
+      break;
+    case N_BREW:
+      break;   // unreachable: the brew states own the button while brewing
+    case N_CHOICE: {
+      int cost = (s_choiceIdx == 1) ? n.costB : n.costA;
+      if (cost > s_gold) {                   // can't afford it: the "nope" buzz
+        startMelody(MEL_NOTREADY, ARRAY_COUNT(MEL_NOTREADY), g_now);
+        break;
+      }
+      s_gold -= cost;
+      if (s_choiceIdx == 1) { s_flags |= n.setFlag; storyGoto(n.nextB); }
+      else storyGoto(n.nextA);
+      break;
+    }
+    case N_BATTLE:
+      if (s_bp != BP_CHOOSE) break;          // beats play out on their own
+      if (s_choiceIdx == 0) chooseAttack();
+      else                  storyBrewStart();
+      break;
+    case N_END:
+      break;                                 // transient — storyGoto routed home
+  }
+}
+
+// Ease a shown HP value toward the real one at a fixed rate, so damage and
+// healing visibly drain/refill the bar (and tick its number) instead of
+// snapping — the change would otherwise be easy to miss.
+static void easeHP(float* shown, int actual, uint32_t dt) {
+  float target = (float)actual;
+  float step = HP_DRAIN_RATE * (float)dt / 1000.0f;
+  if (*shown > target) { *shown -= step; if (*shown < target) *shown = target; }
+  else if (*shown < target) { *shown += step; if (*shown > target) *shown = target; }
+}
+
+// Timed story/battle beats. Shown HP always eases (heal cards animate their
+// bar too). Tunes loop until pressed; scenes run out their clock; battle
+// message phases hold, then hand the turn over (win -> nextA, KO -> nextB).
+static void updateStory(uint32_t now, uint32_t dt) {
+  easeHP(&s_phpShown, s_php, dt);
+  easeHP(&s_ehpShown, s_ehp, dt);
+  const StoryNode& n = s_story[s_node];
+  if (n.kind == N_TUNE) {
+    if (!s_melodyActive) startMelody(MEL_LUTE, ARRAY_COUNT(MEL_LUTE), now);
+    return;
+  }
+  if (n.kind == N_SCENE) {
+    if (now - g_stateMs >= n.ms) storyGoto(n.nextA);
+    return;
+  }
+  if (n.kind != N_BATTLE) return;      // cards/choices advance on press
+  uint32_t el = now - g_stateMs;
+  switch (s_bp) {
+    case BP_INTRO:
+      if (el >= readHoldMs(s_bmsg)) {
+        bool ambush = s_bdef->firstStrikeFlag && (s_flags & s_bdef->firstStrikeFlag);
+        if (ambush && s_biteN == 0) doBite();
+        else battlePhase(BP_CHOOSE);
+      }
+      break;
+    case BP_ROLL:
+      if (el >= BATTLE_ROLL_MS) {
+        int dmg = 4 + (s_questRoll - 1) / 5;           // roll 1..20 -> 4..7
+        s_ehp -= dmg;
+        if (s_ehp < 0) s_ehp = 0;
+        if (s_ehp == 0) {
+          snprintf(s_bmsg, sizeof(s_bmsg), "Rolled %d: hit for %d - it falls!", s_questRoll, dmg);
+          startMelody(MEL_DICE_FANFARE, ARRAY_COUNT(MEL_DICE_FANFARE), now);
+        } else {
+          snprintf(s_bmsg, sizeof(s_bmsg), "Rolled %d: you hit for %d!", s_questRoll, dmg);
+          startMelody(MEL_TOGGLE, ARRAY_COUNT(MEL_TOGGLE), now);
+        }
+        battlePhase(BP_HIT);
+      }
+      break;
+    case BP_HIT:
+      if (el >= readHoldMs(s_bmsg)) {
+        if (s_ehp <= 0) { startMelody(MEL_SUCCESS, ARRAY_COUNT(MEL_SUCCESS), now);
+                          storyGoto(n.nextA); }        // won
+        else doBite();
+      }
+      break;
+    case BP_BITE:
+      if (el >= readHoldMs(s_bmsg)) {
+        if (s_php <= 0) { startMelody(MEL_KO, ARRAY_COUNT(MEL_KO), now);
+                          storyGoto(n.nextB); }        // knocked out
+        else battlePhase(BP_CHOOSE);
+      }
+      break;
+    case BP_MAULED:
+      if (el >= readHoldMs(s_bmsg)) { startMelody(MEL_KO, ARRAY_COUNT(MEL_KO), now);
+                                      storyGoto(n.nextB); }
+      break;
+    case BP_BREW_OK:
+    case BP_BREW_BAD:
+      if (el >= readHoldMs(s_bmsg)) doBite();  // brewing consumed the turn
+      break;
+    case BP_CHOOSE:
+      break;                                 // waiting on the player
+  }
 }
 
 // ---- Settings model (reusable mini-menu) -------------------------------
@@ -493,8 +1201,32 @@ static void persistBlank()   { prefs.putUChar("blank", g_blankIdx); }
 static void settingsEnter() { s_menuIdx = 0; s_navAccum = 0; s_menuEditing = false; enterState(ST_SETTINGS); }
 // Leaving the menu resyncs to whatever is physically on the base (bottles may
 // have been seated/removed while the menu owned the screen).
-static void settingsExit()  { s_navAccum = 0; s_menuEditing = false; enterCombo(s_sensedCombo); }
+static void settingsExit()  { s_navAccum = 0; s_menuEditing = false; enterCombo(s_sensedCombo);
+                              // Back on the carousel, stay on the Settings panel.
+                              if (g_state == ST_IDLE) { s_homePanel = HP_SETTINGS; s_homeX = (float)(PANEL_W * HP_SETTINGS); } }
 static void diagEnter()     { s_navAccum = 0; s_menuEditing = false; enterState(ST_DIAG); }
+
+// ---- Home carousel model -------------------------------------------------
+// One row per panel: its renderer and what a press does. Order must match the
+// HomePanel enum (static_assert below keeps them honest).
+static void renderHomePlace(int dx, uint32_t now);
+static void renderHomeQuest(int dx, uint32_t now);
+static void renderHomeSettings(int dx, uint32_t now);
+static void homePressNothing() {   // nothing to confirm until bottles arrive
+  startMelody(MEL_NOTREADY, ARRAY_COUNT(MEL_NOTREADY), g_now);
+}
+
+struct HomePanelDef {
+  void (*render)(int dx, uint32_t now);   // draw the panel shifted by dx
+  void (*press)();                        // short press while it's in view
+};
+static const HomePanelDef kHomePanels[] = {
+  { renderHomePlace,    homePressNothing },  // HP_PLACE
+  { renderHomeQuest,    storyBegin       },  // HP_QUEST
+  { renderHomeSettings, settingsEnter    },  // HP_SETTINGS
+};
+static_assert(ARRAY_COUNT(kHomePanels) == HP_COUNT,
+              "kHomePanels must have one row per HomePanel entry");
 
 enum ItemKind { K_CHOICE, K_RANGE, K_INFO, K_ACTION };
 struct MenuItem {
@@ -568,125 +1300,53 @@ static void menuPress() {
   }
 }
 
-// ---- Reveal kick-off (shared by the press path and the ritual) ----------
-static void startReveal(uint32_t now) {
-  s_revealPhase = RP_ANIM;
-  s_revealStyle = (int)(esp_random() % 3);   // pick a random reveal animation
-  enterState(ST_REVEAL);                     // stamps the phase clock
-  startMelody(MEL_SUCCESS, ARRAY_COUNT(MEL_SUCCESS), now);
-  Serial.printf("[reveal] %s\n", kPotions[g_universe][g_combo]);
-}
-
-// ---- Act 3: the Grand Brew ritual ---------------------------------------
-// All three essences demand more than stirring: after the bar fills, the brew
-// speaks a growing incantation of glyphs (turn right / turn left / press) and
-// you must repeat it back. RIT_ROUNDS verses, each a longer prefix of the same
-// RIT_SEQ_LEN-symbol sequence (classic Simon). A wrong answer just replays the
-// verse — the master potion should feel earned, not punishing.
-
-static int ritRoundLen() { return s_ritRound + 2; }   // verse lengths 2, 3, 4
-
-static void playSymTone(uint8_t sym, uint32_t now) {
-  switch (sym) {
-    case SYM_CW:  startMelody(MEL_SYM_CW,  ARRAY_COUNT(MEL_SYM_CW),  now); break;
-    case SYM_CCW: startMelody(MEL_SYM_CCW, ARRAY_COUNT(MEL_SYM_CCW), now); break;
-    default:      startMelody(MEL_SYM_PRESS, ARRAY_COUNT(MEL_SYM_PRESS), now); break;
+// ---- Home carousel navigation -------------------------------------------
+// Turn on the idle screen: move between panels, wrapping at both ends (left
+// from the first panel arrives at the last, and vice versa).
+static void updateHomeNav(int32_t d) {
+  int steps = navSteps(d);
+  if (!steps) return;
+  int p = ((s_homePanel + steps) % HP_COUNT + HP_COUNT) % HP_COUNT;
+  if (p != s_homePanel) {
+    s_homePanel = p;
+    startMelody(MEL_TICK, ARRAY_COUNT(MEL_TICK), g_now);
   }
 }
 
-// Begin (or replay) the current verse's SHOW phase. Re-stamps the phase clock;
-// glyph i sounds/draws during elapsed [i*RIT_GLYPH_MS, (i+1)*RIT_GLYPH_MS).
-static void ritShowBegin(uint32_t now) {
-  s_ritPhase = RI_SHOW;
-  g_stateMs = now;
-  s_ritShowIdx = -1;
-  s_ritInputIdx = 0;
-  s_ritAccum = 0;
-}
-
-static void ritualEnter(uint32_t now) {
-  for (int i = 0; i < RIT_SEQ_LEN; i++) s_ritSeq[i] = (uint8_t)(esp_random() % 3);
-  s_ritRound = 0;
-  s_ritPhase = RI_INTRO;
-  enterState(ST_RITUAL);
-  startMelody(MEL_RITBEGIN, ARRAY_COUNT(MEL_RITBEGIN), now);
-  Serial.println("[ritual] the Grand Brew begins");
-}
-
-// One answer (turn or press) during RI_INPUT. Echoes the symbol's note, then
-// advances the verse, finishes the ritual, or flags a miss.
-static void ritInput(uint8_t sym, uint32_t now) {
-  if (s_ritPhase != RI_INPUT) return;
-  playSymTone(sym, now);
-  if (sym != s_ritSeq[s_ritInputIdx]) {
-    s_ritPhase = RI_MISS;
-    g_stateMs = now;
-    startMelody(MEL_NOTREADY, ARRAY_COUNT(MEL_NOTREADY), now);
-    return;
-  }
-  s_ritInputIdx++;
-  g_stateMs = now;                      // each answer refreshes the stall timeout
-  if (s_ritInputIdx < ritRoundLen()) return;
-  if (s_ritRound >= RIT_ROUNDS - 1) {   // incantation complete -> the reveal
-    startReveal(now);
-  } else {
-    s_ritPhase = RI_GOOD;
-    g_stateMs = now;
-    startMelody(MEL_RITGOOD, ARRAY_COUNT(MEL_RITGOOD), now);
-  }
-}
-
-static void updateRitual(uint32_t now, int32_t d) {
-  uint32_t el = now - g_stateMs;
-  switch (s_ritPhase) {
-    case RI_INTRO:
-      if (el >= RIT_INTRO_MS) ritShowBegin(now);
-      break;
-    case RI_SHOW: {
-      int idx = (int)(el / RIT_GLYPH_MS);
-      int len = ritRoundLen();
-      if (idx < len && idx != s_ritShowIdx) {
-        s_ritShowIdx = idx;
-        playSymTone(s_ritSeq[idx], now);
-      }
-      if (idx >= len) {                 // verse spoken -> your turn
-        s_ritPhase = RI_INPUT;
-        g_stateMs = now;
-        s_ritInputIdx = 0;
-        s_ritAccum = 0;
-      }
-      break;
-    }
-    case RI_INPUT:
-      if (d != 0) {
-        // A direction flip clears the accumulator so jiggle can't add up.
-        if ((d > 0 && s_ritAccum < 0) || (d < 0 && s_ritAccum > 0)) s_ritAccum = 0;
-        s_ritAccum += d;
-        if      (s_ritAccum >=  RIT_TURN_COUNTS) { s_ritAccum = 0; ritInput(SYM_CW,  now); }
-        else if (s_ritAccum <= -RIT_TURN_COUNTS) { s_ritAccum = 0; ritInput(SYM_CCW, now); }
-      }
-      if (now - g_stateMs >= RIT_INPUT_TIMEOUT_MS) ritShowBegin(now);  // lost? hear it again
-      break;
-    case RI_GOOD:
-      if (el >= RIT_GOOD_MS) { s_ritRound++; ritShowBegin(now); }
-      break;
-    case RI_MISS:
-      if (el >= RIT_MISS_MS) ritShowBegin(now);
-      break;
-  }
+// Ease the scroll offset toward the selected panel along the SHORTEST way
+// around the circular strip (framerate-independent exponential ease, ~90 ms
+// time constant — quick but visibly a slide).
+static void updateHomeScroll(uint32_t dt) {
+  const float W = (float)(HP_COUNT * PANEL_W);
+  float target = (float)(s_homePanel * PANEL_W);
+  float diff = target - s_homeX;
+  if (diff >  W * 0.5f) diff -= W;      // the other way round is shorter
+  if (diff < -W * 0.5f) diff += W;
+  if (fabsf(diff) < 0.5f) { s_homeX = target; return; }
+  float k = 1.0f - expf(-(float)dt / 90.0f);
+  s_homeX += diff * k;
+  if (s_homeX < 0.0f) s_homeX += W;     // keep the offset inside the strip
+  if (s_homeX >= W)   s_homeX -= W;
 }
 
 // ---- Button actions (state-aware) --------------------------------------
 static void onShortPress(uint32_t now) {
   switch (g_state) {
     case ST_IDLE:
-      settingsEnter();                       // the knob opens Settings
+      kHomePanels[s_homePanel].press();   // activate the panel in view
       break;
     case ST_IDENTIFY:
     case ST_STIRRING:
-      if (g_combo == 0) break;
-      if (s_stirReady) startReveal(now);
-      else startMelody(MEL_NOTREADY, ARRAY_COUNT(MEL_NOTREADY), now);  // stir first
+      if (g_combo == 0) {
+        if (s_storyBrew) storyBrewCancel();  // empty cauldron: back to the fight
+        break;
+      }
+      if (s_stirReady) {
+        if (s_storyBrew) { storyBrewResolve(); break; }  // story judges the brew
+        startReveal(now);
+      } else {
+        startMelody(MEL_NOTREADY, ARRAY_COUNT(MEL_NOTREADY), now);  // stir first
+      }
       break;
     case ST_RITUAL:
       if (s_ritPhase == RI_INTRO) ritShowBegin(now);   // impatient? skip the card
@@ -694,6 +1354,9 @@ static void onShortPress(uint32_t now) {
       break;
     case ST_SETTINGS:
       menuPress();
+      break;
+    case ST_STORY:
+      storyPress();
       break;
     case ST_REVEAL:
     case ST_DIAG:
@@ -713,7 +1376,15 @@ static void onLongPress(uint32_t now) {
       } else settingsExit();                     // ...otherwise leave the menu
       break;
     case ST_DIAG:     settingsEnter(); break;     // diagnostic back to the menu
-    case ST_RITUAL:   enterCombo(s_sensedCombo); break;  // abandon the ritual, resync
+    case ST_STORY:    storyEnd();      break;     // abandon the quest
+    case ST_IDENTIFY:
+    case ST_STIRRING:
+      if (s_storyBrew) storyEnd();                // abandon mid-brew too
+      break;
+    case ST_RITUAL:
+      if (s_storyBrew) storyEnd();                // abandon mid-brew too
+      else enterCombo(s_sensedCombo);             // abandon the ritual, resync
+      break;
     default:          break;
   }
 }
@@ -743,12 +1414,16 @@ static void updateStir(uint32_t now, uint32_t dt, int32_t d) {
   // Stir only matters in identify/stirring (loop dispatches the delta by state).
   if (g_state != ST_IDENTIFY && g_state != ST_STIRRING) return;
 
+  // Story brew with nothing seated: just wait — a stir can't start until an
+  // ingredient arrives (reeds drive enterCombo), and the story owns the exits.
+  if (s_storyBrew && g_combo == 0) return;
+
   // Identify resilience: if the base is physically empty we keep showing the
   // combo (so turning still starts the stir) until a grace period lapses; only
-  // then fall back to idle. This is the cooldown after a magnet is removed.
-  if (g_state == ST_IDENTIFY && s_sensedCombo == 0 &&
+  // then fall back to idle (or, mid-story-brew, to the empty brew prompt).
+  if (g_state == ST_IDENTIFY && g_combo != 0 && s_sensedCombo == 0 &&
       (uint32_t)(now - s_baseEmptyMs) >= REED_GRACE_MS) {
-    enterCombo(0);   // -> idle
+    enterCombo(0);
     return;
   }
 
@@ -858,6 +1533,12 @@ static void drawCenteredF(const char* s, int y) {  // font must be set first
   oled.drawStr((128 - oled.getStrWidth(s)) / 2, y, s);
 }
 
+// Centered with a horizontal offset — used by the home carousel to slide a
+// whole panel's content sideways (U8g2 clips at the buffer edge for free).
+static void drawCenteredFX(const char* s, int y, int dx) {
+  oled.drawStr((128 - oled.getStrWidth(s)) / 2 + dx, y, s);
+}
+
 // A 4-point sparkle / star of radius r (0..3).
 static void drawSparkle(int x, int y, int r) {
   oled.drawPixel(x, y);
@@ -895,11 +1576,127 @@ struct Star { int8_t x, y, phase; };
 static const Star kStars[] = {
   {12, 11, 0}, {116, 13, 3}, {10, 44, 6}, {119, 46, 2}, {30, 56, 5}, {99, 55, 1}
 };
-static void drawTwinkles(uint32_t now) {
+static void drawTwinkles(uint32_t now, int dx = 0) {
   for (auto& s : kStars) {
     int ph = (int)((now / 110 + s.phase * 5) % 16);
     int tri = ph < 8 ? ph : 15 - ph;       // 0..7..0
-    drawSparkle(s.x, s.y, tri / 3);        // radius 0..2
+    drawSparkle(s.x + dx, s.y, tri / 3);   // radius 0..2
+  }
+}
+
+// U8g2's drawLine takes UNSIGNED coordinates: anything even partly off-screen
+// wraps to ~65k and Bresenham smears a stray line across the buffer (this was
+// visible as horizontal streaks when the die entered from off-screen). So all
+// line drawing that can leave the screen goes through this Liang-Barsky clip.
+static void drawLineClipped(float x0, float y0, float x1, float y1) {
+  float dx = x1 - x0, dy = y1 - y0;
+  float t0 = 0.0f, t1 = 1.0f;
+  const float p[4] = { -dx, dx, -dy, dy };
+  const float q[4] = { x0, 127.0f - x0, y0, 63.0f - y0 };
+  for (int i = 0; i < 4; i++) {
+    if (p[i] == 0.0f) { if (q[i] < 0.0f) return; continue; }
+    float r = q[i] / p[i];
+    if (p[i] < 0.0f) { if (r > t1) return; if (r > t0) t0 = r; }
+    else             { if (r < t0) return; if (r < t1) t1 = r; }
+  }
+  oled.drawLine((u8g2_uint_t)lroundf(x0 + t0 * dx), (u8g2_uint_t)lroundf(y0 + t0 * dy),
+                (u8g2_uint_t)lroundf(x0 + t1 * dx), (u8g2_uint_t)lroundf(y0 + t1 * dy));
+}
+
+// ---- The 3D d20: an icosahedron wireframe --------------------------------
+// Golden-ratio vertex table (coordinate magnitude sqrt(1 + phi^2) ~= 1.902)
+// and the standard 20-face index list, wound consistently so the SIGN of each
+// face's projected area says which way it faces — back faces aren't drawn,
+// which is what makes the wireframe read as a solid object.
+static constexpr float PHI = 1.618034f;
+static const float kIcoV[12][3] = {
+  { -1,  PHI, 0 }, { 1,  PHI, 0 }, { -1, -PHI, 0 }, { 1, -PHI, 0 },
+  { 0, -1,  PHI }, { 0, 1,  PHI }, { 0, -1, -PHI }, { 0, 1, -PHI },
+  {  PHI, 0, -1 }, {  PHI, 0, 1 }, { -PHI, 0, -1 }, { -PHI, 0, 1 },
+};
+static const uint8_t kIcoF[20][3] = {
+  { 0, 11, 5 }, { 0, 5, 1 }, { 0, 1, 7 }, { 0, 7, 10 }, { 0, 10, 11 },
+  { 1, 5, 9 }, { 5, 11, 4 }, { 11, 10, 2 }, { 10, 7, 6 }, { 7, 1, 8 },
+  { 3, 9, 4 }, { 3, 4, 2 }, { 3, 2, 6 }, { 3, 6, 8 }, { 3, 8, 9 },
+  { 4, 9, 5 }, { 2, 4, 11 }, { 6, 2, 10 }, { 8, 6, 7 }, { 9, 8, 1 },
+};
+
+// Orientation (Rx then Ry) that points the {0,11,5} face normal (-1,1,1)/√3
+// straight at the camera — the "landed, face up" pose the roll settles into.
+static constexpr float D20_FACE_AX = 0.7854f;   // pi/4
+static constexpr float D20_FACE_AY = 0.6155f;   // atan(1/sqrt(2))
+
+// Fixed scrambled numbering for the 20 faces (like a real die's layout). At
+// draw time it's rotated so face 0 — the face the roll lands on — carries
+// this quest's rolled number; every other face keeps a stable number relative
+// to it, so numbers travel WITH their faces as the die tumbles.
+static const uint8_t kD20FaceNum[20] = {
+  20, 8, 14, 2, 16, 10, 4, 18, 6, 12, 1, 13, 7, 19, 5, 11, 17, 3, 15, 9
+};
+
+// Rotate the icosahedron about all three axes (Rx, then Ry, then Rz), apply
+// weak perspective, and draw the front-facing faces' edges. Faces that are
+// big enough on screen also get their number at the projected centroid, in a
+// font scaled to the face — so the numbers sit ON the die. (Leaves the U8g2
+// font changed; set your font after calling.) `r` is the on-screen
+// circumradius in pixels.
+static void drawD20Tumbling(int cx, int cy, int r, float ax, float ay, float az) {
+  float sa = sinf(ax), ca = cosf(ax);
+  float sb = sinf(ay), cb = cosf(ay);
+  float sc = sinf(az), cc = cosf(az);
+  const float k = (float)r / 1.902f;         // model radius -> pixels
+  float px[12], py[12];
+  for (int i = 0; i < 12; i++) {
+    float x = kIcoV[i][0], y = kIcoV[i][1], z = kIcoV[i][2];
+    float y1 = y * ca - z * sa,  z1 = y * sa + z * ca;    // Rx
+    float x2 = x * cb + z1 * sb, z2 = -x * sb + z1 * cb;  // Ry
+    float x3 = x2 * cc - y1 * sc, y3 = x2 * sc + y1 * cc; // Rz
+    float f = 4.5f / (4.5f - z2);            // weak perspective (z in ±1.9)
+    px[i] = (float)cx + x3 * k * f;
+    py[i] = (float)cy + y3 * k * f;
+  }
+  for (int fc = 0; fc < 20; fc++) {
+    int a = kIcoF[fc][0], b = kIcoF[fc][1], c = kIcoF[fc][2];
+    float area = (px[b] - px[a]) * (py[c] - py[a]) -
+                 (px[c] - px[a]) * (py[b] - py[a]);
+    if (area <= 0.0f) continue;              // back face
+    drawLineClipped(px[a], py[a], px[b], py[b]);
+    drawLineClipped(px[b], py[b], px[c], py[c]);
+    drawLineClipped(px[c], py[c], px[a], py[a]);
+
+    // Number on the face, once it's big enough to read. `area` is 2x the
+    // projected triangle area; the landed front face at r=28 is ~1700, the
+    // small home-screen icon tops out ~220 (below threshold, so no numbers).
+    if (area < 450.0f) continue;
+    int n = ((kD20FaceNum[fc] - kD20FaceNum[0] + (int)s_questRoll - 1) % 20 + 20) % 20 + 1;
+    char buf[3];
+    snprintf(buf, sizeof(buf), "%d", n);
+    const uint8_t* fnt;
+    int capHalf;                             // half the digit height, to centre
+    if      (area >= 1200.0f) { fnt = u8g2_font_ncenB14_tr; capHalf = 7; }
+    else if (area >=  700.0f) { fnt = u8g2_font_ncenB10_tr; capHalf = 5; }
+    else                      { fnt = u8g2_font_5x8_tr;     capHalf = 3; }
+    oled.setFont(fnt);
+    int gx = (int)lroundf((px[a] + px[b] + px[c]) / 3.0f);
+    int gy = (int)lroundf((py[a] + py[b] + py[c]) / 3.0f);
+    int w = oled.getStrWidth(buf);
+    int x = gx - w / 2, ybl = gy + capHalf;
+    // drawStr coords are unsigned too — skip a number that would leave the screen
+    if (x >= 0 && x + w < 128 && ybl - 2 * capHalf >= 0 && ybl <= 63)
+      oled.drawStr(x, ybl, buf);
+  }
+}
+
+// A small gear: ring + slowly-orbiting teeth + hub hole (Settings panel icon).
+static void drawGear(int cx, int cy, uint32_t now) {
+  oled.drawCircle(cx, cy, 8);
+  oled.drawCircle(cx, cy, 3);
+  float spin = (float)now * 0.0012f;
+  for (int k = 0; k < 8; k++) {
+    float a = spin + (float)k * ((float)M_PI / 4.0f);
+    int tx = cx + (int)lroundf(10.0f * cosf(a));
+    int ty = cy - (int)lroundf(10.0f * sinf(a));
+    oled.drawBox(tx - 1, ty - 1, 3, 3);
   }
 }
 
@@ -950,22 +1747,66 @@ static const uint8_t* const kSerifFonts[] = {
   u8g2_font_ncenB14_tr, u8g2_font_ncenB12_tr, u8g2_font_ncenB10_tr
 };
 
-static void renderIdle(uint32_t now) {
-  oled.clearBuffer();
-  drawTwinkles(now);
-  drawMoon(15, 15, 6);
-
+// --- Home carousel panels: each draws its 128px page shifted by dx ---------
+static void renderHomePlace(int dx, uint32_t now) {
+  drawTwinkles(now, dx);
+  drawMoon(15 + dx, 15, 6);
   oled.setFont(u8g2_font_ncenB12_tr);
-  drawCenteredF("Place the", 28);
-  drawCenteredF("ingredients", 44);
-
-  // Divider with diamond end-caps.
-  oled.drawHLine(28, 51, 72);
-  drawDiamond(22, 51); drawDiamond(106, 51);
-
-  // The way into Settings (no realm shown here — it lives in the menu).
+  drawCenteredFX("Place the", 26, dx);
+  drawCenteredFX("ingredients", 42, dx);
+  oled.drawHLine(28 + dx, 48, 72);
+  drawDiamond(22 + dx, 48); drawDiamond(106 + dx, 48);
   oled.setFont(u8g2_font_5x8_tr);
-  drawCenteredF("Press for settings", 62);
+  drawCenteredFX("turn to explore", 57, dx);
+}
+
+static void renderHomeQuest(int dx, uint32_t now) {
+  // The d20 tumbles lazily in 3D, teasing a roll. Time wraps every 62832 ms
+  // (= 2*pi * 10 s), where every 0.1-multiple spin rate completes whole
+  // turns — so the angles stay small for sinf/cosf and the wrap is seamless.
+  float t = (float)(now % 62832U) * 0.001f;
+  drawD20Tumbling(64 + dx, 16, 11, 0.9f * t, 0.7f * t, 0.5f * t);
+  int sr = ((now / 260) & 1) ? 2 : 1;
+  drawSparkle(38 + dx, 12, sr); drawSparkle(90 + dx, 12, sr);
+  oled.setFont(u8g2_font_ncenB12_tr);
+  drawCenteredFX("Story Mode", 44, dx);
+  oled.setFont(u8g2_font_5x8_tr);
+  drawCenteredFX("press to begin", 57, dx);
+}
+
+static void renderHomeSettings(int dx, uint32_t now) {
+  drawGear(64 + dx, 16, now);
+  oled.setFont(u8g2_font_ncenB12_tr);
+  drawCenteredFX("Settings", 44, dx);
+  oled.setFont(u8g2_font_5x8_tr);
+  drawCenteredFX("press to enter", 57, dx);
+}
+
+// The idle screen is the home carousel. Panels sit side by side in a circular
+// HP_COUNT * PANEL_W strip; s_homeX is the viewport's offset into it, so
+// mid-slide the outgoing and incoming panels are both visible, moving
+// together — including across the wrap seam (last panel <-> first). Page dots
+// + edge chevrons are a fixed overlay (they don't slide).
+static void renderHome(uint32_t now) {
+  oled.clearBuffer();
+  const int W = HP_COUNT * PANEL_W;
+  int scroll = (int)lroundf(s_homeX) % W;
+  for (int p = 0; p < HP_COUNT; p++) {
+    int dx = p * PANEL_W - scroll;
+    if (dx < -W / 2) dx += W;                // nearest copy on the loop
+    if (dx >= W / 2) dx -= W;
+    if (dx <= -PANEL_W || dx >= PANEL_W) continue;   // fully off-screen
+    kHomePanels[p].render(dx, now);
+  }
+  const int dotStep = 12;                    // page dots, centered as a group
+  int dotX = (128 - (HP_COUNT - 1) * dotStep) / 2;
+  for (int i = 0; i < HP_COUNT; i++, dotX += dotStep) {
+    if (i == s_homePanel) oled.drawBox(dotX - 1, 60, 3, 3);
+    else                  oled.drawPixel(dotX, 61);
+  }
+  // Chevrons both sides — the carousel wraps, so there's always a next panel.
+  oled.drawLine(3, 28, 1, 31);     oled.drawLine(1, 31, 3, 34);
+  oled.drawLine(124, 28, 126, 31); oled.drawLine(126, 31, 124, 34);
   oled.sendBuffer();
 }
 
@@ -1400,15 +2241,605 @@ static void renderDiag() {
   oled.sendBuffer();
 }
 
+// ---- Story mode rendering ------------------------------------------------
+// Word-wrap `s` in the CURRENT font into lines of width `w` centered on
+// `cx`, first baseline `y`, spacing `lineH`, at most `maxLines` (overflow is
+// dropped). cx matters when the text block isn't screen-centered (bubbles).
+static void drawWrapped(const char* s, int cx, int y, int lineH, int maxLines, int w) {
+  char buf[160];
+  strncpy(buf, s, sizeof(buf) - 1);
+  buf[sizeof(buf) - 1] = '\0';
+  char line[40] = "";
+  int n = 0;
+  for (char* tok = strtok(buf, " "); tok && n < maxLines; tok = strtok(nullptr, " ")) {
+    char trial[40];
+    snprintf(trial, sizeof(trial), "%s%s%s", line, line[0] ? " " : "", tok);
+    if (!line[0] || oled.getStrWidth(trial) <= w) {
+      strncpy(line, trial, sizeof(line) - 1);
+      line[sizeof(line) - 1] = '\0';
+    } else {
+      oled.drawStr(cx - oled.getStrWidth(line) / 2, y, line);
+      y += lineH;
+      n++;
+      strncpy(line, tok, sizeof(line) - 1);
+      line[sizeof(line) - 1] = '\0';
+    }
+  }
+  if (line[0] && n < maxLines)
+    oled.drawStr(cx - oled.getStrWidth(line) / 2, y, line);
+}
+
+// The giant rat — procedural like the rest of the firmware's art: a solid
+// silhouette facing left (body, haunch, head, ears, snout, legs, eye,
+// whiskers) with an idle bob, twitching ear and swaying tail. Referenced by
+// kBtRat as its sprite; other universes' battles bring their own.
+static void drawRat(int cx, int cy, uint32_t now) {
+  int y = cy + (int)((now / 300) & 1);           // idle bob
+  float sw = sinf((float)now * 0.006f) * 3.0f;   // tail sway
+  oled.drawLine(cx + 11, y, cx + 19, y - 2 + (int)sw);
+  oled.drawLine(cx + 19, y - 2 + (int)sw, cx + 25, y - 6 + (int)(sw * 1.6f));
+  oled.drawFilledEllipse(cx, y, 13, 7);          // body
+  oled.drawDisc(cx + 7, y - 1, 6);               // haunch
+  oled.drawDisc(cx - 12, y - 2, 5);              // head
+  oled.drawTriangle(cx - 16, y - 4, cx - 22, y, cx - 15, y + 1);  // snout
+  oled.drawDisc(cx - 13, y - 8 - (int)((now / 700) & 1), 2);      // ear (twitch)
+  oled.drawDisc(cx - 9, y - 7, 2);               // far ear
+  for (int i = 0; i < 4; i++)                    // legs
+    oled.drawBox(cx - 7 + i * 5, y + 5, 2, 5);
+  oled.setDrawColor(0);
+  oled.drawDisc(cx - 12, y - 3, 1);              // eye
+  oled.setDrawColor(1);
+  oled.drawLine(cx - 21, y - 1, cx - 26, y - 2); // whiskers
+  oled.drawLine(cx - 21, y + 1, cx - 26, y + 2);
+}
+
+// The Jarl's crown — an emblem stands in for a face (a literal bust reads
+// badly at this size). Upright and pixel-crisp (rotation aliases to mush in
+// 1-bit at 30 px); the life comes from a slow bob and an XOR glint hopping
+// from tip to tip. Art like this is previewed off-device with
+// tools/oledsim.py — keep that sketch and this code line-for-line twins.
+static void drawJarl(int cx, int cy, uint32_t now) {
+  int yb = cy + (int)lroundf(2.0f * sinf((float)(now % 3142U) * 0.002f));
+  oled.drawBox(cx - 16, yb + 3, 33, 6);                        // band
+  oled.drawTriangle(cx - 16, yb + 3, cx - 11, yb - 8,  cx - 5, yb + 3);
+  oled.drawTriangle(cx - 6,  yb + 3, cx,      yb - 12, cx + 6, yb + 3);
+  oled.drawTriangle(cx + 5,  yb + 3, cx + 11, yb - 8,  cx + 16, yb + 3);
+  oled.drawDisc(cx - 11, yb - 10, 2);                          // ball tips
+  oled.drawDisc(cx,      yb - 14, 2);
+  oled.drawDisc(cx + 11, yb - 10, 2);
+  oled.setDrawColor(0);                                        // band jewels
+  oled.drawDisc(cx - 9, yb + 6, 1);
+  oled.drawDisc(cx,     yb + 6, 1);
+  oled.drawDisc(cx + 9, yb + 6, 1);
+  oled.setDrawColor(1);
+  static const int8_t gtx[3] = { -11, 0, 11 };                 // glint hops
+  static const int8_t gty[3] = { -10, -14, -10 };              // tip to tip
+  int k = (int)((now / 900) % 3);
+  int gr = ((now / 150) & 1) ? 4 : 3;
+  int gx = cx + gtx[k], gy = yb + gty[k];
+  oled.setDrawColor(2);                                        // XOR: reads on
+  for (int i = 1; i <= gr; i++) {                              // white or black
+    oled.drawPixel(gx + i, gy);
+    oled.drawPixel(gx - i, gy);
+    oled.drawPixel(gx, gy + i);
+    oled.drawPixel(gx, gy - i);
+  }
+  oled.setDrawColor(1);
+}
+
+// Healer Danica — mortar & pestle, the pestle grinding in slow circles and
+// the odd fleck of herb rising. Twin: emblem sketch via tools/oledsim.py.
+static void drawHealer(int cx, int cy, uint32_t now) {
+  oled.drawFilledEllipse(cx, cy + 6, 13, 8);       // bowl...
+  oled.setDrawColor(0);
+  oled.drawBox(cx - 14, cy - 4, 29, 8);            // ...with the top carved flat
+  oled.setDrawColor(1);
+  oled.drawBox(cx - 13, cy + 3, 27, 3);            // rim
+  oled.drawBox(cx - 5, cy + 14, 10, 3);            // foot
+  float a = 0.6f + 0.25f * sinf((float)now * 0.004f);
+  int tx = cx + (int)lroundf(16.0f * cosf(a));     // pestle rocks as it grinds
+  int ty = cy + 4 - (int)lroundf(20.0f * sinf(a));
+  for (int o = -1; o <= 1; o++)
+    drawLineClipped(cx + 2 + o, cy + 4, tx + o, ty);
+  oled.drawDisc(tx, ty, 3);                        // knob
+  if ((now / 400) & 1) {                           // a pinch of the grind
+    oled.drawPixel(cx - 6, cy - 2);
+    oled.drawPixel(cx - 9, cy - 5);
+  }
+}
+
+// The steward — a goblet with a wobbling wine line and a drip beading off
+// the rim. His emblem is the murder weapon.
+static void drawSteward(int cx, int cy, uint32_t now) {
+  oled.drawBox(cx - 8, cy - 14, 17, 7);            // bowl
+  oled.drawTriangle(cx - 8, cy - 7, cx + 8, cy - 7, cx, cy + 1);  // taper
+  oled.drawBox(cx - 1, cy + 1, 3, 8);              // stem
+  oled.drawBox(cx - 6, cy + 9, 13, 3);             // foot
+  oled.setDrawColor(0);                            // wine line, wobbling
+  for (int x = cx - 7; x < cx + 8; x++)
+    oled.drawPixel(x, cy - 12 + (int)lroundf(1.2f * sinf((float)x * 0.9f +
+                                                         (float)now * 0.005f)));
+  oled.setDrawColor(1);
+  int fall = (int)((now / 60) % 26);               // a drop falls...
+  oled.drawPixel(cx + 9, cy - 13 + fall);
+  oled.drawPixel(cx + 9, cy - 12 + fall);
+  if (fall > 13) oled.drawPixel(cx + 9, cy - 13);  // ...as the next beads up
+}
+
+// Quavers drifting upward on a sway — the lute is heard, not seen. Stems and
+// flags go through drawLineClipped: as a note rises off-screen its stem top
+// goes negative, and raw u8g2 lines would wrap and smear (the vertical
+// cousin of the dice-roll streak bug).
+static void drawLuteNotes(int cx, int cy, uint32_t now) {
+  for (int i = 0; i < 3; i++) {
+    int rise = (int)((now / 45 + i * 27) % 40);    // unhurried, like the tune
+    int x = cx - 30 + i * 30 + (int)lroundf(4.0f * sinf((float)now * 0.002f + i * 2.0f));
+    int y = cy + 14 - rise;
+    oled.drawDisc(x, y, 2);                        // note head (per-pixel safe)
+    drawLineClipped(x + 2, y - 8, x + 2, y);       // stem
+    drawLineClipped(x + 2, y - 8, x + 5, y - 5);   // flag
+  }
+}
+
+// One flame tongue, scanned per ROW: left/right edges wander with layered
+// sine noise (licking hardest near the tip), the whole tongue sways, and its
+// height flickers — an organic outline, not geometry. Carve/inner layers
+// pass the parent's swaySeed so they stay nested. Returns the tip's virtual
+// y (pre-pan coordinates; caller subtracts cam).
+static int drawFlameLayer(int cam, uint32_t now, int cx0, int baseVy,
+                          int height, int maxW, float seed, uint8_t color,
+                          float swaySeed) {
+  int flick = (int)lroundf(4.0f * sinf((float)now * 0.009f + seed) +
+                           3.0f * sinf((float)now * 0.023f + seed * 2.3f));
+  int tipVy = baseVy - height - flick;
+  oled.setDrawColor(color);
+  for (int vy = tipVy; vy <= baseVy; vy++) {
+    int y = vy - cam;
+    if (y < 0 || y >= 64) continue;
+    float h = (float)(vy - tipVy) / (float)(baseVy - tipVy);
+    float half = (float)maxW * sqrtf(h);           // pointed tip, broad body
+    float sway = (1.0f - h) * (1.0f - h) * 5.0f * sinf((float)now * 0.0017f + swaySeed);
+    float lick = (1.0f - h) * 4.0f + 1.0f;
+    float fx = (float)cx0 + sway;
+    float eL = fx - half + lick * sinf((float)vy * 0.23f + (float)now * 0.011f + seed);
+    float eR = fx + half + lick * sinf((float)vy * 0.29f + (float)now * 0.013f + seed * 1.7f);
+    if (eR > eL)
+      oled.drawHLine((u8g2_uint_t)lroundf(eL), (u8g2_uint_t)y,
+                     (u8g2_uint_t)(lroundf(eR - eL) + 1));
+  }
+  oled.setDrawColor(1);
+  return tipVy;
+}
+
+// A thick log: filled rotated slab with round ends.
+static void drawLog(int cam, int x0, int y0, int x1, int y1, int half) {
+  float dx = (float)(x1 - x0), dy = (float)(y1 - y0);
+  float ln = sqrtf(dx * dx + dy * dy);
+  int px = (int)lroundf(-dy / ln * (float)half);
+  int py = (int)lroundf(dx / ln * (float)half);
+  oled.drawTriangle(x0 + px, y0 + py - cam, x1 + px, y1 + py - cam,
+                    x1 - px, y1 - py - cam);
+  oled.drawTriangle(x0 + px, y0 + py - cam, x1 - px, y1 - py - cam,
+                    x0 - px, y0 - py - cam);
+  oled.drawDisc(x0, y0 - cam, half);
+  oled.drawDisc(x1, y1 - cam, half);
+}
+
+// Campfire scene (N_SCENE), framed CLOSE like a pinball cutaway — the fire
+// fills the frame rather than sitting neatly inside it. The camera pans down
+// a 200px virtual scene: sinuous smoke wisps first, then flames rising into
+// frame, landing with the blaze near full-height and the crossed logs
+// cropped by the bottom edge. (Even at an inn, it's always a campfire.)
+// Twin: fire3_sketch.py via tools/oledsim.py. Node entry stamped g_stateMs.
+static void drawCampfire(int cx, int cy, uint32_t now) {
+  (void)cx; (void)cy;                              // full-screen scene
+  uint32_t el = now - g_stateMs;
+  float t = (el >= 3500) ? 1.0f : (float)el / 3500.0f;
+  float e = t * t * (3.0f - 2.0f * t);             // smoothstep pan
+  int cam = (int)lroundf(e * 136.0f);              // viewport top in the scene
+
+  // smoke: S-shaped wisps (pixel trails, no closed shapes), widening as they
+  // rise; during the hold their tails still lick the top of the frame
+  for (int i = 0; i < 4; i++) {
+    int rise = (int)((now / 18 + i * 47) % 120);
+    int head = 148 - rise;
+    int xc = 52 + i * 10;
+    for (int d = 0; d < 36; d++) {
+      int y = head + d - cam;
+      if (y < 0 || y >= 64) continue;
+      float amp = 2.0f + (float)(36 - d) * 0.16f;  // older smoke wanders wider
+      int x = xc + (int)lroundf(amp * sinf((float)(head + d) * 0.17f +
+                                           (float)now * 0.002f + i * 1.7f));
+      oled.drawPixel(x, y);
+      oled.drawPixel(x + 1, y);
+    }
+  }
+
+  // flames: an organic silhouette, scanned per row — main blaze plus two
+  // side tongues merge into one many-peaked outline whose edges lick
+  drawFlameLayer(cam, now, 46, 193, 24, 14, 4.0f, 1, 4.0f);   // left tongue
+  drawFlameLayer(cam, now, 82, 193, 20, 13, 8.5f, 1, 8.5f);   // right tongue
+  int tip = drawFlameLayer(cam, now, 64, 193, 50, 30, 1.0f, 1, 1.0f);
+
+  // tongue separations: thin black wavy trails INSIDE the silhouette (a
+  // carved core reads as a donut once the logs close its bottom edge)
+  oled.setDrawColor(0);
+  for (int i = 0; i < 2; i++) {
+    int x0 = 56 + i * 15;
+    int top = 166 - (int)lroundf(5.0f * sinf((float)now * 0.006f + i * 2.2f));
+    for (int vy = top; vy < 192; vy++) {
+      int y = vy - cam;
+      if (y < 0 || y >= 64) continue;
+      int x = x0 + (int)lroundf(3.0f * sinf((float)vy * 0.3f + (float)now * 0.008f + i * 2.0f));
+      oled.drawPixel(x, y);
+      oled.drawPixel(x + 1, y);
+    }
+  }
+  oled.setDrawColor(1);
+
+  // a detached lick above the tip, sometimes
+  if (sinf((float)now * 0.007f + 1.0f) > 0.45f) {
+    int lx = 64 + (int)lroundf(5.0f * sinf((float)now * 0.0017f + 1.0f));
+    int ly = tip - 5 - cam;
+    if (ly >= 2) oled.drawDisc(lx, ly, 2);
+  }
+
+  // logs: two thick crossed slabs with round ends, end-grain rings and
+  // dashed bark, cropped by the bottom edge of the frame
+  drawLog(cam, 12, 195, 72, 186, 5);
+  drawLog(cam, 56, 186, 116, 196, 5);
+  oled.setDrawColor(0);
+  oled.drawCircle(12, 195 - cam, 2);
+  oled.drawCircle(116, 196 - cam, 2);
+  for (int d = 0; d < 4; d++) {
+    int x = 22 + d * 12;
+    oled.drawLine(x, 196 - d - cam, x + 6, 195 - d - cam);
+    oled.drawLine(x + 46, 188 + d - cam, x + 52, 189 + d - cam);
+  }
+  oled.setDrawColor(1);
+
+  // embers drifting up around the blaze
+  for (int i = 0; i < 6; i++) {
+    int ph = (int)((now / 90 + i * 31) % 60);
+    if (ph < 34) {
+      int ex = 26 + (i * 19) % 76 + (int)lroundf(2.0f * sinf((float)now * 0.004f + i));
+      int ey = 186 - ph - cam;
+      oled.drawPixel(ex, ey);
+      if (ph < 16) oled.drawPixel(ex + 1, ey);
+    }
+  }
+}
+
+// One Afflicted cultist: robed trapezoid (drawn as hand-clamped row scans so
+// a figure can slide half off the frame edge without u8g2's unsigned hlines
+// dropping whole rows), bowed hood, coughing bob, slow sway.
+static void drawHooded(int x, int y, uint32_t now, float phase) {
+  int bob  = (int)lroundf(1.5f * sinf((float)now * 0.005f + phase));
+  int sway = (int)lroundf(1.0f * sinf((float)now * 0.002f + phase * 2.0f));
+  x += sway;
+  for (int r = 0; r <= 20; r++) {                  // robe: 5 -> 10 half-width
+    int half = 5 + (r * 5) / 20;
+    int lx = x - half, rx = x + half;
+    if (rx < 0 || lx > 127) continue;
+    if (lx < 0) lx = 0;
+    if (rx > 127) rx = 127;
+    oled.drawHLine((u8g2_uint_t)lx, (u8g2_uint_t)(y - 20 + r),
+                   (u8g2_uint_t)(rx - lx + 1));
+  }
+  int lx = x - 4, rx = x + 4;                      // shoulders/neck
+  if (rx >= 0 && lx <= 127) {
+    if (lx < 0) lx = 0;
+    if (rx > 127) rx = 127;
+    oled.drawBox((u8g2_uint_t)lx, (u8g2_uint_t)(y - 23),
+                 (u8g2_uint_t)(rx - lx + 1), 5);
+  }
+  oled.drawDisc(x + 1, y - 26 + bob, 6);           // hood (per-pixel safe)
+  oled.setDrawColor(0);
+  oled.drawDisc(x + 3, y - 24 + bob, 3);           // the dark inside the cowl
+  oled.setDrawColor(1);
+}
+
+// Sneak scene (N_SCENE, act 3): the camera tracks right through the shrine —
+// swaying Afflicted, brazier smoke — and the only trace of YOU is a trail of
+// footprints appearing across the floor. Invisible, walking. Twin:
+// afflicted_sketch.py via tools/oledsim.py.
+static void drawSneak(int cx, int cy, uint32_t now) {
+  (void)cx; (void)cy;
+  uint32_t el = now - g_stateMs;
+  float t = (el >= 4200) ? 1.0f : (float)el / 4200.0f;
+  float e = t * t * (3.0f - 2.0f * t);
+  int cam = (int)lroundf(e * 110.0f);              // pans right, then holds
+
+  oled.drawHLine(0, 54, 128);                      // shrine floor
+  for (int b = 0; b < 2; b++) {                    // braziers
+    int x = (b ? 156 : 66) - cam;
+    if (x - 3 >= 0 && x + 4 < 128) {
+      oled.drawBox(x - 3, 50, 7, 4);
+      oled.drawVLine(x, 46, 4);
+    }
+  }
+  for (int i = 0; i < 4; i++) {                    // brazier smoke wisps
+    int rise = (int)((now / 20 + i * 43) % 70);
+    int vx = 66 + (i % 2) * 90;
+    int head = 44 - rise;
+    int x0 = vx - cam;
+    if (x0 > -8 && x0 < 136 && head >= 0 && head < 64) {
+      float amp = 1.5f + (float)rise * 0.09f;
+      int x = x0 + (int)lroundf(amp * sinf((float)(head + rise) * 0.2f +
+                                           (float)now * 0.002f + i));
+      oled.drawPixel(x, head);
+      oled.drawPixel(x + 1, head);
+    }
+  }
+  static const int16_t kVx[4] = { 30, 104, 186, 238 };   // the Afflicted
+  for (int i = 0; i < 4; i++) {
+    int x = kVx[i] - cam;
+    if (x > -20 && x < 148) drawHooded(x, 54, now, i * 1.9f);
+  }
+  int steps = (int)(el / 260);                     // your footprints, appearing
+  for (int k = 0; k < steps; k++) {
+    int fx = 6 + k * 9 - cam;
+    if (fx >= 0 && fx < 126) oled.drawHLine((u8g2_uint_t)fx, (k & 1) ? 60 : 58, 3);
+  }
+}
+
+// Labelled HP bar with its number ("You  [######  ] 23"). Takes the ANIMATED
+// value (easeHP's output), so damage visibly drains and healing refills.
+// `x` lets it sit inside a card frame as well as flush in the battle layout.
+static void drawHPBar(int x, int y, const char* who, float hp, int maxhp) {
+  int shown = (int)lroundf(hp);
+  oled.setFont(u8g2_font_5x8_tr);
+  oled.drawStr(x, y + 7, who);
+  oled.drawFrame(x + 22, y, 78, 8);
+  int w = (shown > 0) ? (76 * shown + maxhp - 1) / maxhp : 0;  // ceil: 1 HP stays visible
+  if (w > 76) w = 76;
+  if (w > 0) oled.drawBox(x + 23, y + 1, w, 6);
+  char b[8];
+  snprintf(b, sizeof(b), "%d", shown);
+  oled.drawStr(x + 104, y + 7, b);
+}
+
+// THE choice interface, used everywhere a decision is made: one option at a
+// time on the bottom of the screen, flanked by < > chevrons — turn to cycle
+// options, press to select. Options too wide for one line wrap onto two
+// (split at the space nearest the middle). Masks what's behind it.
+static void drawChoiceLine(const char* opt) {
+  oled.setFont(u8g2_font_helvR08_tr);
+  int w = oled.getStrWidth(opt);
+  if (w <= 100) {                                  // fits on one line
+    oled.setDrawColor(0);
+    oled.drawBox(0, 52, 128, 12);
+    oled.setDrawColor(1);
+    int x = (128 - w) / 2;
+    oled.drawStr(x, 62, opt);
+    oled.setFont(u8g2_font_5x8_tr);
+    oled.drawStr(x - 12, 61, "<");
+    oled.drawStr(x + w + 8, 61, ">");
+    return;
+  }
+  char l1[24], l2[24];                             // two lines: break mid-way
+  int len = (int)strlen(opt), best = 0, bestDist = 999;
+  for (int i = 0; opt[i]; i++) {
+    if (opt[i] != ' ') continue;
+    int di = i - len / 2;
+    if (di < 0) di = -di;
+    if (di < bestDist) { bestDist = di; best = i; }
+  }
+  if (best == 0) {                                 // no space to break at:
+    oled.drawStr((128 - w) / 2, 62, opt);          // draw as-is (will clip)
+    return;
+  }
+  snprintf(l1, sizeof(l1), "%.*s", best, opt);
+  snprintf(l2, sizeof(l2), "%s", opt + best + 1);
+  int w1 = oled.getStrWidth(l1), w2 = oled.getStrWidth(l2);
+  int wm = (w1 > w2) ? w1 : w2;
+  oled.setDrawColor(0);
+  oled.drawBox(0, 41, 128, 23);
+  oled.setDrawColor(1);
+  oled.drawStr((128 - w1) / 2, 52, l1);
+  oled.drawStr((128 - w2) / 2, 62, l2);
+  oled.setFont(u8g2_font_5x8_tr);
+  oled.drawStr((128 - wm) / 2 - 12, 58, "<");
+  oled.drawStr((128 + wm) / 2 + 8, 58, ">");
+}
+
+// Framed narration card: title, wrapped body, blinking press cue. A card
+// whose node heals also shows the player's HP bar refilling (a).
+static void renderStoryCard(const char* title, const char* body, uint32_t now,
+                            bool showHP) {
+  drawFancyFrame();
+  oled.setFont(u8g2_font_helvB08_tr);
+  drawCenteredF(title, 16);
+  oled.setFont(u8g2_font_5x8_tr);
+  if (showHP) {
+    drawWrapped(body, 64, 27, 8, 2, 114);    // shorter body: the bar needs room
+    drawHPBar(6, 42, "You", s_phpShown, PLAYER_MAX_HP);
+  } else {
+    drawWrapped(body, 64, 27, 8, 4, 114);
+  }
+  if ((now / 600) & 1) drawCenteredF("- press -", 58);
+}
+
+// The attack roll: a full-screen pinball cutaway. The die tumbles in along a
+// table line spinning on all three axes, the camera zooms onto the face as
+// the spin bleeds into the landing pose, and the rolled number holds front
+// and centre (face numbers ride the die, so the result arrives ON its face).
+// Rotation is continuous across all three stages.
+static void renderBattleRoll(uint32_t el) {
+  if (el < ROLL_TUMBLE_MS) {
+    float t = (float)el / (float)ROLL_TUMBLE_MS;
+    float u = 1.0f - t;
+    oled.setFont(u8g2_font_5x8_tr);
+    drawCenteredF("you attack!", 8);
+    oled.drawHLine(8, 56, 112);                       // the table it rolls along
+    int cx = 14 + (int)lroundf(t * 50.0f);            // rolls in from the left
+    float bounce = fabsf(sinf(t * 3.0f * (float)M_PI));
+    int cy = 47 - (int)lroundf(24.0f * u * bounce);   // decaying bounces
+    drawD20Tumbling(cx, cy, 9,
+                    D20_FACE_AX + 1.5f + 12.0f * u * u,
+                    D20_FACE_AY + 1.0f + 9.0f * u * u,
+                    6.0f * u * u);
+    if (cx >= 26 && t < 0.7f) {                       // speed streaks behind it
+      oled.drawHLine(cx - 20, cy - 3, 6);
+      oled.drawHLine(cx - 26, cy + 2, 8);
+    }
+  } else if (el < ROLL_TUMBLE_MS + ROLL_ZOOM_MS) {
+    float t = (float)(el - ROLL_TUMBLE_MS) / (float)ROLL_ZOOM_MS;
+    float e = t * t * (3.0f - 2.0f * t);              // smoothstep push-in
+    int cy = 47 - (int)lroundf(e * 15.0f);            // 47 -> 32
+    int r  = 9 + (int)lroundf(e * 19.0f);             // 9  -> 28
+    drawD20Tumbling(64, cy, r,
+                    D20_FACE_AX + 1.5f * (1.0f - e),
+                    D20_FACE_AY + 1.0f * (1.0f - e),
+                    0.0f);
+  } else {                                            // landed: hold the number
+    uint32_t hold = el - ROLL_TUMBLE_MS - ROLL_ZOOM_MS;
+    drawD20Tumbling(64, 32, 28, D20_FACE_AX, D20_FACE_AY, 0.0f);
+    if (hold < 300) oled.drawCircle(64, 32, 30 + (int)(hold / 6));  // impact ring
+  }
+}
+
+// Battle layout: both HP bars stacked at the top (the key information), the
+// enemy beneath, and the bottom text line carrying messages or the choice
+// spinner. The roll is a full-screen cutaway; damage flashes the WHOLE screen.
+static void renderStoryBattle(uint32_t now) {
+  uint32_t el = now - g_stateMs;
+  if (s_bp == BP_ROLL) { renderBattleRoll(el); return; }
+  drawHPBar(2, 0, "You", s_phpShown, PLAYER_MAX_HP);
+  drawHPBar(2, 10, s_bdef->name, s_ehpShown, s_bdef->enemyHP);
+  int lunge = (s_bp == BP_BITE && el < 300) ? -8 : 0;   // the bite's pounce
+  s_bdef->sprite(72 + lunge, 34, now);
+  if (s_bp == BP_CHOOSE) {
+    drawChoiceLine(s_choiceIdx == 0
+                       ? (s_numb ? "Attack (arm numb!)" : "Attack for 4-7")
+                       : "Brew potion");
+  } else {
+    oled.setFont(u8g2_font_5x8_tr);
+    drawWrapped(s_bmsg, 64, 54, 8, 2, 124);
+  }
+  // A landed hit — either side's — blink-inverts the whole screen.
+  if ((s_bp == BP_HIT || s_bp == BP_BITE || s_bp == BP_MAULED) &&
+      el < 360 && ((el / 90) & 1) == 0) {
+    oled.setDrawColor(2);
+    oled.drawBox(0, 0, 128, 64);
+    oled.setDrawColor(1);
+  }
+}
+
+// Character speech: portrait bust on the left, speech bubble (with a tail
+// toward the speaker) on the right, speaker name beneath — a face beats a
+// wall of text. Node.title is the speaker, node.body the words.
+static void renderStorySpeak(const StoryNode& n, uint32_t now) {
+  n.art(20, 30, now);
+  oled.setFont(u8g2_font_4x6_tr);
+  int nw = oled.getStrWidth(n.title);
+  int nx = 20 - nw / 2;
+  if (nx < 1) nx = 1;
+  oled.drawStr(nx, 62, n.title);
+  oled.drawRFrame(42, 4, 84, 44, 5);               // the bubble
+  oled.drawLine(42, 26, 36, 30);                   // its tail, mouth-ward
+  oled.drawLine(42, 34, 36, 30);
+  oled.setDrawColor(0);
+  oled.drawVLine(42, 27, 7);                       // open the bubble into the tail
+  oled.setDrawColor(1);
+  oled.setFont(u8g2_font_5x8_tr);
+  drawWrapped(n.body, 84, 14, 8, 4, 76);
+  if ((now / 600) & 1) {
+    oled.setFont(u8g2_font_4x6_tr);
+    oled.drawStr(104, 62, "press");
+  }
+}
+
+static void renderStory(uint32_t now) {
+  oled.clearBuffer();
+  const StoryNode& n = s_story[s_node];
+  switch (n.kind) {
+    case N_CARD:
+      renderStoryCard(n.title, n.body, now, n.heal != 0);
+      break;
+    case N_SPEAK:
+      renderStorySpeak(n, now);
+      break;
+    case N_CHOICE: {
+      // Decision HUD: your HP bar (so "+15 HP" means something) and the
+      // purse, then the prompt and the spinner.
+      drawHPBar(2, 0, "You", s_phpShown, PLAYER_MAX_HP);
+      char purse[10];                        // the inventory, such as it is
+      snprintf(purse, sizeof(purse), "%d gp", s_gold);
+      oled.setFont(u8g2_font_5x8_tr);
+      oled.drawStr(126 - oled.getStrWidth(purse), 19, purse);
+      oled.setFont(u8g2_font_helvB08_tr);
+      drawCenteredF(n.title, 32);
+      drawChoiceLine(s_choiceIdx == 0 ? n.optA : n.optB);
+      break;
+    }
+    case N_TUNE:
+      if (n.art) n.art(64, 24, now);
+      oled.setFont(u8g2_font_helvB08_tr);
+      drawCenteredF(n.title, 50);
+      oled.setFont(u8g2_font_5x8_tr);
+      drawCenteredF("press to stop", 62);
+      break;
+    case N_SCENE:
+      if (n.art) n.art(64, 32, now);         // full-screen cinematic
+      break;
+    case N_BREW:
+      break;   // transient — the brew states own the screen
+    case N_BATTLE:
+      renderStoryBattle(now);
+      break;
+    case N_END:
+      break;   // transient — storyGoto already routed home
+  }
+  oled.sendBuffer();
+}
+
+// Story brew screen (replaces IDENTIFY while a quest brew is on): names the
+// target, lists what's seated, and surfaces the recipe hint if it was earned.
+// With nothing seated a press backs out to the fight (no turn consumed).
+// STIRRING keeps its normal vortex/power-bar screen.
+static void renderStoryBrew(uint32_t now) {
+  oled.clearBuffer();
+  drawTitleBar(s_bdef->brewTitle);
+  oled.setFont(u8g2_font_5x8_tr);
+  bool canBack = (s_story[s_node].kind != N_BREW);   // story brews must be brewed
+  const char* hint = (s_bdef->hint &&
+                      (s_bdef->hintFlag == 0 || (s_flags & s_bdef->hintFlag)))
+                         ? s_bdef->hint : nullptr;
+  if (g_combo == 0) {
+    drawCenteredF("Place ingredients", 28);
+    if (hint) drawWrapped(hint, 64, 41, 8, 2, 120);
+    if (canBack) drawCenteredF("press to go back", 62);
+  } else {
+    int y = 27;
+    for (int s = 0; s < 3; s++)
+      if (g_combo & (1 << s)) { drawCenteredF(kIngredients[g_universe][s], y); y += 10; }
+    // Bottom note: after a wrong brew, alternate WHAT went wrong with the
+    // recipe hint (what to do instead) — feedback plus the fix, not a shrug.
+    if (s_bmsg[0] && hint)
+      drawWrapped(((now / 2500) & 1) ? hint : s_bmsg, 64, 53, 8, 2, 124);
+    else if (s_bmsg[0])
+      drawWrapped(s_bmsg, 64, 53, 8, 2, 124);
+    else if (hint)
+      drawWrapped(((now / 2500) & 1) ? "turn to stir" : hint, 64, 53, 8, 2, 124);
+    else
+      drawCenteredF("turn to stir", 62);
+  }
+  oled.sendBuffer();
+}
+
 static void render() {
   if (!g_haveDisplay) return;  // headless: skip drawing if no panel on the bus
   uint32_t now = g_now;        // same clock everything else uses this tick
   switch (g_state) {
-    case ST_IDLE:     renderIdle(now);     break;
-    case ST_IDENTIFY: renderIdentify(now); break;
-    case ST_STIRRING: renderStirring(now); break;
+    case ST_IDLE:     renderHome(now);     break;
+    case ST_IDENTIFY: if (s_storyBrew) renderStoryBrew(now);
+                      else renderIdentify(now);
+                      break;
+    case ST_STIRRING: renderStirring(now); break;  // shared by story brews
     case ST_RITUAL:   renderRitual(now);   break;
     case ST_REVEAL:   renderReveal(now);   break;
+    case ST_STORY:    renderStory(now);    break;
     case ST_SETTINGS: renderSettings();    break;
     case ST_DIAG:     renderDiag();        break;
   }
@@ -1627,12 +3058,16 @@ void loop() {
   }
 
   switch (g_state) {
+    case ST_IDLE:     if (d) updateHomeNav(d);
+                      updateHomeScroll(dt);       break;  // carousel slide
     case ST_IDENTIFY:
     case ST_STIRRING: updateStir(now, dt, d);     break;
     case ST_RITUAL:   updateRitual(now, d);       break;  // show -> repeat verses
     case ST_SETTINGS: if (d) updateMenuNav(d);    break;
     case ST_REVEAL:   updateReveal(now);          break;  // ANIM -> NAME -> idle
-    default:          break;  // IDLE / DIAG: encoder not navigated
+    case ST_STORY:    if (d) storyNav(d);
+                      updateStory(now, dt);       break;  // scenes + battle beats
+    default:          break;  // DIAG: encoder not navigated
   }
 
   updateButton(now);

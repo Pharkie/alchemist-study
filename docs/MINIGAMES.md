@@ -26,6 +26,11 @@ Design notes:
   sub-phases (`RI_INTRO → RI_SHOW → RI_INPUT → RI_GOOD/RI_MISS`), per
   [ARCHITECTURE.md](ARCHITECTURE.md). The combo stays latched through
   STIRRING/RITUAL/REVEAL, so a flaky reed can't kill a ritual mid-verse.
+- **Story brews get the same acts.** The story escalates its brews 1 → 2 → 3
+  bottles, deliberately walking the player up the three mechanics; a finished
+  ritual inside a story brew routes to `storyBrewResolve` (the story judges
+  the potion) instead of REVEAL, and long-press abandons to the carousel as
+  with any story brew.
 
 ## Ideas on the shelf (future reference)
 
