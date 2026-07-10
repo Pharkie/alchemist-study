@@ -529,6 +529,117 @@ def sneak(s, el):
             s.draw_hline(fx, 60 if (k & 1) else 58, 3)
 
 
+def power_bar(s, progress):
+    bx, by, bw, bh = 14, 41, 100, 10
+    s.draw_frame(bx, by, bw, bh)
+    fill = lroundf((bw - 4) * progress)
+    if fill > 0:
+        s.draw_box(bx + 2, by + 2, fill, bh - 4)
+
+
+def attune(s, now, player, target, ok, progress, msg):
+    s.set_font("helvR08")
+    s.draw_centered("- attuning -", 8)
+    wy = 25
+    AMP, KX = 8.0, 0.10
+    for x in range(2, 126):
+        ty = wy + lroundf(AMP * math.sin(KX * x + target))
+        if x % 3 == 0:
+            s.draw_pixel(x, ty)
+        py = wy + lroundf(AMP * math.sin(KX * x + player))
+        s.draw_pixel(x, py)
+        if ok:
+            s.draw_pixel(x, py + 1)
+    if ok:
+        sr = 2 if (now // 180) & 1 else 1
+        sparkle(s, 6, wy, sr)
+        sparkle(s, 122, wy, sr)
+    power_bar(s, progress)
+    s.set_font("5x8")
+    s.draw_centered(msg, 62)
+
+
+RIT_WORDS = ["turn right", "turn left", "press"]   # SYM_CW, SYM_CCW, SYM_PRESS
+
+
+def rit_glyph(s, sym, cx, cy):
+    R = 13
+    if sym == 2:  # press: dotted ring + hub
+        s.draw_circle(cx, cy, R)
+        s.draw_disc(cx, cy, 5)
+        return
+    d = 1 if sym == 0 else -1
+    t = 0.35
+    while t < 5.6:
+        a = d * t - math.pi / 2
+        s.draw_pixel(cx + lroundf(R * math.cos(a)), cy + lroundf(R * math.sin(a)))
+        t += 0.10
+    ae = d * 5.6 - math.pi / 2
+    tx, ty = -math.sin(ae) * d, math.cos(ae) * d
+    nx, ny = math.cos(ae), math.sin(ae)
+    hx, hy = cx + lroundf(R * math.cos(ae)), cy + lroundf(R * math.sin(ae))
+    s.draw_triangle(hx + lroundf(6.0 * tx), hy + lroundf(6.0 * ty),
+                    hx + lroundf(3.5 * nx), hy + lroundf(3.5 * ny),
+                    hx - lroundf(3.5 * nx), hy - lroundf(3.5 * ny))
+
+
+def corner_sparkles(s, now):
+    r = 1 if (now // 300) & 1 else 0
+    for x, y in ((9, 10), (118, 10), (9, 53), (118, 53)):
+        sparkle(s, x, y, r)
+
+
+def ritual_intro(s):
+    fancy_frame(s)
+    s.set_font("helvR08")
+    s.draw_centered("all three essences...", 16)
+    s.set_font("ncenB12")
+    s.draw_centered("The Grand", 33)
+    s.draw_centered("Brew", 49)
+    s.set_font("5x8")
+    s.draw_centered("watch the incantation", 60)
+
+
+def ritual_show(s, verse, rounds, sym):
+    s.set_font("5x8")
+    s.draw_centered("verse %d of %d - watch" % (verse, rounds), 8)
+    rit_glyph(s, sym, 64, 32)
+    s.set_font("5x8")
+    s.draw_centered(RIT_WORDS[sym], 60)
+
+
+def ritual_input(s, now, verse, rounds, length, answered):
+    s.set_font("5x8")
+    s.draw_centered("verse %d of %d - repeat" % (verse, rounds), 8)
+    bs, gap = 12, 6
+    x0 = (128 - (length * bs + (length - 1) * gap)) // 2
+    for i in range(length):
+        x = x0 + i * (bs + gap)
+        if i < answered:
+            s.draw_box(x, 26, bs, bs)
+        else:
+            s.draw_frame(x, 26, bs, bs)
+            if i == answered and (now // 300) & 1:
+                s.draw_frame(x + 2, 28, bs - 4, bs - 4)
+    s.set_font("5x8")
+    s.draw_centered("turn or press to answer", 62)
+
+
+def ritual_good(s, now):
+    corner_sparkles(s, now)
+    s.set_font("ncenB12")
+    s.draw_centered("Well stirred!", 34)
+    s.set_font("5x8")
+    s.draw_centered("the brew deepens...", 56)
+
+
+def ritual_miss(s):
+    s.set_font("ncenB12")
+    s.draw_centered("It resists!", 34)
+    s.set_font("5x8")
+    s.draw_centered("listen again...", 56)
+
+
 def build():
     panels = ["place", "story", "settings"]
     shots = []
@@ -596,6 +707,16 @@ def build():
                               show_hp=True, php=30))
     shot(lambda s: speak(s, "Jarl Balgruuf",
                          "You mended more than flesh. Skyrim owes you, alchemist.", now))
+    # Brewing acts (minigames): act 2 attuning + act 3 ritual phases.
+    shot(lambda s: attune(s, now, 0.3, 2.2, False, 0.15, "seek the resonance"))
+    shot(lambda s: attune(s, now, 1.9, 2.0, True, 0.65, "hold the resonance"))
+    shot(lambda s: ritual_intro(s))
+    shot(lambda s: ritual_show(s, 1, 3, 0))
+    shot(lambda s: ritual_show(s, 1, 3, 1))
+    shot(lambda s: ritual_show(s, 2, 3, 2))
+    shot(lambda s: ritual_input(s, now, 2, 3, 3, 1))
+    shot(lambda s: ritual_good(s, now))
+    shot(lambda s: ritual_miss(s))
     return shots
 
 

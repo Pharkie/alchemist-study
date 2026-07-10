@@ -69,6 +69,17 @@ SECTIONS = [
         (35, "Realm saved"),
         (36, "The Jarl's bookend"),
     ]),
+    ("Brewing acts — the minigames", [
+        (37, "Act 2 — attuning, out of phase"),
+        (38, "Act 2 — in resonance (glow + sparkles)"),
+        (39, "Act 3 — the Grand Brew card"),
+        (40, "Ritual — 'turn right' glyph"),
+        (41, "Ritual — 'turn left' glyph"),
+        (42, "Ritual — 'press' glyph"),
+        (43, "Ritual — repeat (1 of 3 answered)"),
+        (44, "Ritual — verse complete"),
+        (45, "Ritual — a miss replays the verse"),
+    ]),
 ]
 
 
