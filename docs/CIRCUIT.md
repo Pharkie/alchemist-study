@@ -40,13 +40,13 @@ flowchart TB
   %% ----- Signals from the C3 -----
   C3 -->|"GPIO5 SDA"| OLED
   C3 -->|"GPIO6 SCL"| OLED
-  C3 -->|"GPIO1 tone"| BUZ["Buzzer (passive)"]
-  C3 -->|"GPIO0 CLK"| ENC
-  C3 -->|"GPIO7 DT"| ENC
-  C3 -->|"GPIO20 SW"| ENC
-  C3 -->|"GPIO3"| RD1["Reed 1 - front, horizontal"]
-  C3 -->|"GPIO4"| RD2["Reed 2 - front, horizontal"]
-  C3 -->|"GPIO10"| RD3["Reed 3 - front, horizontal"]
+  C3 -->|"GPIO7 tone"| BUZ["Buzzer (passive)"]
+  C3 -->|"GPIO10 CLK"| ENC
+  C3 -->|"GPIO20 DT"| ENC
+  C3 -->|"GPIO21 SW"| ENC
+  C3 -->|"GPIO1"| RD1["Reed 1 - front, horizontal"]
+  C3 -->|"GPIO3"| RD2["Reed 2 - front, horizontal"]
+  C3 -->|"GPIO4"| RD3["Reed 3 - front, horizontal"]
 
   %% ----- Logic ground returns -----
   OLED ---|"GND"| RGND
@@ -123,5 +123,6 @@ flowchart TB
   onboard LDO). Everything logic-side is 3V3, so there's **no level shifting**.
   The KY-040's pull-ups go to 3V3 (not 5V), keeping the GPIOs safe.
 - Pin choices avoid the C3 **strapping pins** (GPIO2/8/9) and the **USB** pins
-  (GPIO18/19). Note GPIO20 is UART0-RX by default but free here because the
-  console runs over **USB-CDC**.
+  (GPIO18/19). Note GPIO20/21 are UART0 RX/TX by default but free here because
+  the console runs over **USB-CDC**. The boot ROM briefly drives GPIO21 as TX
+  during reset, so avoid holding the encoder button through a power-up.

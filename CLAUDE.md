@@ -48,15 +48,15 @@ silently bump this pin.
 
 | Function                 | GPIO  | Notes                                              |
 |--------------------------|-------|----------------------------------------------------|
-| Reed slot 1 (bit0)       | 3     | `INPUT_PULLUP`; magnet pulls LOW = present         |
-| Reed slot 2 (bit1)       | 4     | `INPUT_PULLUP`                                      |
-| Reed slot 3 (bit2)       | 10    | `INPUT_PULLUP`                                      |
+| Reed slot 1 (bit0)       | 1     | `INPUT_PULLUP`; magnet pulls LOW = present         |
+| Reed slot 2 (bit1)       | 3     | `INPUT_PULLUP`                                      |
+| Reed slot 3 (bit2)       | 4     | `INPUT_PULLUP`                                      |
 | OLED SDA (I²C)           | 5     | SSD1306 128×64, white                              |
 | OLED SCL (I²C)           | 6     |                                                    |
-| Buzzer (passive)         | 1     | `tone()` / `noTone()`                              |
-| Encoder A                | 0     | Safe on C3 — GPIO0 is NOT a strapping pin here     |
-| Encoder B                | 7     |                                                    |
-| Encoder SW (push)        | 20    | `INPUT_PULLUP`                                      |
+| Buzzer (passive)         | 7     | `tone()` / `noTone()`                              |
+| Encoder A (CLK)          | 10    |                                                    |
+| Encoder B (DT)           | 20    | UART0-RX by default; free (console is USB-CDC)     |
+| Encoder SW (push)        | 21    | `INPUT_PULLUP`; UART0-TX by default, free likewise |
 
 **Combo bit mapping:** `bit0=slot1, bit1=slot2, bit2=slot3` → combo value `1..7`
 (`0` = empty base = idle).

@@ -4,8 +4,10 @@ Phased plan. Check items off as completed. See `CLAUDE.md` for the full spec,
 pin map, and potion tables.
 
 > **Status:** Phases 0–6 shipped as **v0.1** (the bench firmware). Items whose
-> behaviour later evolved carry a *(superseded: …)* note. Next up: Stage 2
-> (connectivity), below.
+> behaviour later evolved carry a *(superseded: …)* note. GPIO numbers quoted
+> in the phase notes are the original bench wiring; the final pin map lives in
+> `src/pins.h` (and the CLAUDE.md table). Next up: Stage 2 (connectivity),
+> below.
 
 ## Phase 0 — Project setup
 
@@ -58,7 +60,7 @@ Two independent moves here — keep them separate:
       the encoder; intensity/decay tracks stir progress.
 - [x] REVEAL: potion name, word-wrap to two lines if wider than 128px.
 
-## Phase 4 — Audio (buzzer, GPIO1)
+## Phase 4 — Audio (buzzer, GPIO7)
 
 - [x] Stir brewing trill: pitch rises with stir progress (~320 → ~1100 Hz),
       decays back down when the knob is still.

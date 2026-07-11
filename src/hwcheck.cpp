@@ -8,9 +8,9 @@
 // On boot it beeps the buzzer and scans for the OLED. Then it shows a LIVE
 // status screen on the OLED — each reed/button as an ON/off box plus the
 // encoder count — and logs every edge to serial so you can verify magnet
-// make/break:
-//   Reed 1 (GPIO3) ON
-//   Reed 1 (GPIO3) off
+// make/break (GPIO numbers come from pins.h):
+//   Reed 1 (GPIO1) ON
+//   Reed 1 (GPIO1) off
 //
 // Pin map + encoder decode come from src/pins.h / src/quadrature.h —
 // shared with the real firmware, so they can never drift apart.
@@ -43,9 +43,9 @@ static constexpr uint32_t PRESS_HOLD_MS = 2000;
 static void beep(uint16_t f, uint16_t ms) { tone(PIN_BUZZER, f); delay(ms); noTone(PIN_BUZZER); }
 
 static void checkBuzzer() {
-  Serial.println("\n[1/3] BUZZER (GPIO1): 3 rising beeps...");
+  Serial.printf("\n[1/3] BUZZER (GPIO%d): 3 rising beeps...\n", PIN_BUZZER);
   beep(523, 160); delay(70); beep(784, 160); delay(70); beep(1047, 220);
-  Serial.println("      (silent? needs a PASSIVE buzzer + wiring on GPIO1/GND)");
+  Serial.printf("      (silent? needs a PASSIVE buzzer + wiring on GPIO%d/GND)\n", PIN_BUZZER);
 }
 
 static void checkOLED() {
@@ -167,7 +167,8 @@ void loop() {
   static uint32_t lastRep = 0;
   int32_t c = g_encoderCount;
   if (c != lastEnc && now - lastRep > 120) {
-    Serial.printf("Encoder (GPIO0/7) count=%ld  (%s)\n", (long)c, (c > lastEnc) ? "CW +" : "CCW -");
+    Serial.printf("Encoder (GPIO%d/%d) count=%ld  (%s)\n", PIN_ENC_A, PIN_ENC_B,
+                  (long)c, (c > lastEnc) ? "CW +" : "CCW -");
     lastEnc = c;
     lastRep = now;
   }

@@ -24,7 +24,7 @@ pio run -e c3-dev -t upload         # real firmware (verbose)
 
 On boot it runs three quick checks, then a live monitor:
 
-1. **Buzzer** — plays three rising beeps on GPIO1.
+1. **Buzzer** — plays three rising beeps on GPIO7.
 2. **OLED** — scans I²C (SDA=GPIO5/SCL=GPIO6) at 0x3C/0x3D; if found, takes over
    the panel for the live status screen.
 3. **Inputs (live)** — continuously shows and logs the reeds, button and encoder.
@@ -34,10 +34,10 @@ On boot it runs three quick checks, then a live monitor:
 ```
 HW CHECK              enc:NN     <- live encoder count (top-right)
 ----------------------------------
-R1 GPIO3      [ ] off            <- filled box = magnet present (reed closed)
-R2 GPIO4      [#] ON
-R3 GPIO10     [ ] off
-SW GPIO20     PRESS! #3          <- a button tap inverts this row for 2s
+R1 GPIO1      [ ] off            <- filled box = magnet present (reed closed)
+R2 GPIO3      [#] ON
+R3 GPIO4      [ ] off
+SW GPIO21     PRESS! #3          <- a button tap inverts this row for 2s
 ```
 
 - A box **fills** the instant a magnet closes its reed — move the magnet toward
@@ -51,10 +51,10 @@ SW GPIO20     PRESS! #3          <- a button tap inverts this row for 2s
 Both edges of every input are logged, so you can verify make *and* break:
 
 ```
-Reed 1 (GPIO3) ON
-Reed 1 (GPIO3) off
-Button (GPIO20) ON
-Encoder (GPIO0/7) count=12  (CW +)
+Reed 1 (GPIO1) ON
+Reed 1 (GPIO1) off
+Button (GPIO21) ON
+Encoder (GPIO10/20) count=12  (CW +)
 [time] sendBuffer = 30 ms          <- I2C render time (≈30 ms is healthy)
 ```
 
@@ -67,16 +67,16 @@ Encoder (GPIO0/7) count=12  (CW +)
 | Buzzer silent during the 3 beeps | You likely have an **active** buzzer (drones on DC, ignores `tone()`). This project needs a **passive** buzzer for pitched audio. See it sound on plain 3.3 V = active. |
 | A reed never shows ON | That line isn't connected, or the magnet is too weak/far. Check the reed leg → its GPIO and the other leg → GND. |
 | The *wrong* GPIO reacts | Silkscreen/breakout mismatch — the wire is on a different GPIO than labelled. |
-| Encoder count doesn't move | Check CLK→GPIO0, DT→GPIO7, + → 3V3, GND→GND. |
+| Encoder count doesn't move | Check CLK→GPIO10, DT→GPIO20, + → 3V3, GND→GND. |
 | `[time] sendBuffer` spikes to hundreds of ms | Flaky I²C (see OLED drop-out above). Healthy is ~30 ms. |
 
 ## Confirmed-good pin map
 
 | Component | GPIO |
 |---|---|
-| Reed 1 / slot 1 | 3 |
-| Reed 2 / slot 2 | 4 |
-| Reed 3 / slot 3 | 10 |
+| Reed 1 / slot 1 | 1 |
+| Reed 2 / slot 2 | 3 |
+| Reed 3 / slot 3 | 4 |
 | OLED SDA / SCL | 5 / 6 |
-| Buzzer | 1 |
-| Encoder A / B / SW | 0 / 7 / 20 |
+| Buzzer | 7 |
+| Encoder A / B / SW | 10 / 20 / 21 |
