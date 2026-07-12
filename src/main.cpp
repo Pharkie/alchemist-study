@@ -230,7 +230,7 @@ static uint8_t s_questRoll = 14;
 // nextA. A wrong potion is named and re-tried at leisure — UNLESS the node
 // sets nextB, which makes the brew ONE-SHOT: the wrong pour routes there
 // (the final exam pattern — the player who followed the clues brews right).
-enum NodeKind { N_CARD, N_SPEAK, N_CHOICE, N_TUNE, N_SCENE, N_BREW, N_BATTLE, N_END };
+enum NodeKind { N_CARD, N_SPEAK, N_CHOICE, N_TUNE, N_SCENE, N_TITLE, N_BREW, N_BATTLE, N_END };
 
 struct BattleDef {
   const char* name;       // HP bar label
@@ -283,6 +283,11 @@ static Universe s_prevUniverse = UNI_SKYRIM;   // restored when the story ends
 static bool     s_storyPause = false;
 static int      s_pauseIdx   = 0;     // 0 = Quest on, 1 = Quit
 static constexpr uint32_t STORY_PAUSE_MS = 15000;
+// Title cards (N_TITLE): a couple of words in the big serif announcing what's
+// next ("Rat Battle"), inverting four times then settling. No press — they
+// play and move on. Keeps runs of press-through text short (max two in a row).
+static constexpr uint32_t TITLE_FLASH_MS = 120;    // one invert phase (x8 = 4 flashes)
+static constexpr uint32_t TITLE_MS       = 2400;   // total on-screen time
 // Skill select — every quest OPENS by asking, so difficulty is never hidden
 // in a menu. The chosen index IS g_stirLevelIdx (persisted), so free play
 // inherits the last skill sworn at a quest start.
@@ -360,6 +365,9 @@ static const BattleDef kBrewCounter = {
 // Node fields: kind, title, body, optA, optB, nextA, nextB, setFlag,
 //              heal, costA, costB, ms, art, battle
 static const StoryNode kStorySkyrim[] = {
+  // Pacing rule: never more than TWO press-through text screens in a row —
+  // N_TITLE announcements, choices, scenes and brews are the punctuation.
+  // "Act" is internal vocabulary only; the player never reads it.
   /*0 intro  */ { N_CARD, "The Alchemist's Quest",   // plants the grain (act 2)
                   "Whiterun sickens. Even the bread tastes wrong. The Jarl summons you.",
                   nullptr, nullptr, 1, 0, 0, 0, 0, 0, 0, nullptr, nullptr },
@@ -369,124 +377,121 @@ static const StoryNode kStorySkyrim[] = {
   /*2 road   */ { N_CARD, "The Road",
                   "You take the road. In the tall grass, something stirs...",
                   nullptr, nullptr, 4, 0, 0, 0, 0, 0, 0, nullptr, nullptr },
-  /*3 jarl   */ { N_SPEAK, "Jarl Balgruuf",   // bubble fits ~15 chars x 4 lines;
-                  // recipe hint + the intrigue seed (act 2) in nine words
+  /*3 jarl   */ { N_SPEAK, "Jarl Balgruuf",   // recipe hint + act-2 seed
                   "Blue mountain flower mends flesh. Trust no one here.",
                   nullptr, nullptr, 4, 0, 0, 0, 0, 0, 0, drawJarl, nullptr },
-  /*4 battle */ { N_BATTLE, nullptr, nullptr, nullptr, nullptr,
-                  5, 6, 0, 0, 0, 0, 0, nullptr, &kBtRat },
-  /*5 won    */ { N_CARD, "Victory!",   // press-gated clue: the rat ATE poison
+  /*4 title  */ { N_TITLE, "Rat Battle", nullptr, nullptr, nullptr,
+                  5, 0, 0, 0, 0, 0, 0, nullptr, nullptr },
+  /*5 battle */ { N_BATTLE, nullptr, nullptr, nullptr, nullptr,
+                  6, 7, 0, 0, 0, 0, 0, nullptr, &kBtRat },
+  /*6 won    */ { N_CARD, "Victory!",   // press-gated clue: the rat ATE poison
                   "The rat lies dead - gums black with deathbell. Whiterun's gates ahead.",
-                  nullptr, nullptr, 7, 0, 0, 0, 0, 0, 0, nullptr, nullptr },
-  /*6 ko     */ { N_CARD, "Knocked Out",
-                  "Darkness takes you... You wake by the roadside. Try again.",
-                  nullptr, nullptr, 4, 0, 0, 0, 0, 0, 0, nullptr, nullptr },
-  /*7 inn    */ { N_CARD, "The Bannered Mare",
-                  "The innkeep eyes your purse. A hot meal or a drink?",
                   nullptr, nullptr, 8, 0, 0, 0, 0, 0, 0, nullptr, nullptr },
-  /*8 buy    */ { N_CHOICE, "Spend your coin on...", nullptr,
+  /*7 ko     */ { N_CARD, "Knocked Out",       // straight back in: no re-announce
+                  "Darkness takes you... You wake by the roadside. Try again.",
+                  nullptr, nullptr, 5, 0, 0, 0, 0, 0, 0, nullptr, nullptr },
+  /*8 inn    */ { N_CARD, "The Bannered Mare",
+                  "The innkeep eyes your purse. A hot meal or a drink?",
+                  nullptr, nullptr, 9, 0, 0, 0, 0, 0, 0, nullptr, nullptr },
+  /*9 buy    */ { N_CHOICE, "Spend your coin on...", nullptr,
                   "Nord mead: -3gp, +10HP", "Sweetroll: -5gp, +15HP",
-                  9, 10, 0, 0, 3, 5, 0, nullptr, nullptr },
-  /*9 mead   */ { N_CARD, "Nord Mead",
+                  10, 11, 0, 0, 3, 5, 0, nullptr, nullptr },
+  /*10 mead  */ { N_CARD, "Nord Mead",
                   "It warms you to the toes.",
-                  nullptr, nullptr, 11, 0, 0, 10, 0, 0, 0, nullptr, nullptr },
-  /*10 sweet */ { N_CARD, "Sweetroll",
+                  nullptr, nullptr, 12, 0, 0, 10, 0, 0, 0, nullptr, nullptr },
+  /*11 sweet */ { N_CARD, "Sweetroll",
                   "Sweet as victory - and no thief in sight.",
-                  nullptr, nullptr, 11, 0, 0, 15, 0, 0, 0, nullptr, nullptr },
-  /*11 rest  */ { N_CHOICE, "The fire burns low...", nullptr,
+                  nullptr, nullptr, 12, 0, 0, 15, 0, 0, 0, nullptr, nullptr },
+  /*12 rest  */ { N_CHOICE, "The fire burns low...", nullptr,
                   "Play the lute", "Go to sleep",
-                  12, 13, 0, 0, 0, 0, 0, nullptr, nullptr },
-  /*12 lute  */ { N_TUNE, "You strum an old tune",   // loops until pressed
-                  nullptr, nullptr, nullptr, 11, 0, 0, 0, 0, 0, 0,
+                  13, 14, 0, 0, 0, 0, 0, nullptr, nullptr },
+  /*13 lute  */ { N_TUNE, "You strum an old tune",   // loops until pressed
+                  nullptr, nullptr, nullptr, 12, 0, 0, 0, 0, 0, 0,
                   drawLuteNotes, nullptr },
-  /*13 fire  */ { N_SCENE, nullptr, nullptr, nullptr, nullptr,   // pan + hold
-                  14, 0, 0, 0, 0, 0, 6500, drawCampfire, nullptr },
-  /*14 awake */ { N_CARD, "Act 2",   // the wound walks into act 2 (max 2 lines)
-                  "You wake healed. Yet the rat bite weeps...",
-                  nullptr, nullptr, 16, 0, 0, 99, 0, 0, 0, nullptr, nullptr },
-  /*15 end   */ { N_END, nullptr, nullptr, nullptr, nullptr,
-                  0, 0, 0, 0, 0, 0, 0, nullptr, nullptr },
+  /*14 fire  */ { N_SCENE, nullptr, nullptr, nullptr, nullptr,   // night falls:
+                  15, 0, 0, 0, 0, 0, 6500, drawCampfire, nullptr }, // day one ends
 
-  // ---- Act 2: The Steward's Goblet --------------------------------------
-  /*16 diagnose*/ { N_SPEAK, "Healer Danica",   // the bite names the poison
-                  "Deathbell rot. No rat carries this. Something FED it.",
-                  nullptr, nullptr, 17, 0, 0, 0, 0, 0, 0, drawHealer, nullptr },
-  /*17 granary*/ { N_CARD, "The Granary",       // the poison names the man
+  // ---- Act 2 (internal): The Steward's Goblet ----------------------------
+  /*15 wake  */ { N_SPEAK, "Healer Danica",   // wake + diagnosis in one breath
+                  "The bite weeps. Deathbell rot. Something FED that rat.",
+                  nullptr, nullptr, 16, 0, 0, 99, 0, 0, 0, drawHealer, nullptr },
+  /*16 granary*/{ N_CARD, "The Granary",      // the poison names the man
                   "Black petals in the grain. One man holds the key: the steward.",
-                  nullptr, nullptr, 18, 0, 0, 0, 0, 0, 0, nullptr, nullptr },
-  /*18 recipe */ { N_SPEAK, "Healer Danica",    // act 2 recipe, spoken first
-                  "Deathbell kills quick. Bound to the flower, pain LINGERS.",
-                  nullptr, nullptr, 19, 0, 0, 0, 0, 0, 0, drawHealer, nullptr },
-  /*19 choice */ { N_CHOICE, "The steward...", nullptr,
+                  nullptr, nullptr, 17, 0, 0, 0, 0, 0, 0, nullptr, nullptr },
+  /*17 choice */{ N_CHOICE, "The steward...", nullptr,
                   "Confront him", "Watch the granary",
-                  20, 21, 0, 0, 0, 0, 0, nullptr, nullptr },
-  /*20 denial */ { N_CARD, "Denial",
+                  18, 19, 0, 0, 0, 0, 0, nullptr, nullptr },
+  /*18 denial */{ N_CARD, "Denial",
                   "'Prove it,' he smiles. Now he knows you know. The feast is your chance.",
-                  nullptr, nullptr, 22, 0, 0, 0, 0, 0, 0, nullptr, nullptr },
-  /*21 midnight*/{ N_CARD, "Midnight",
-                  "Black petals fall from his sleeve into the grain. Now catch him publicly.",
-                  nullptr, nullptr, 22, 0, 0, 0, 0, 0, 0, nullptr, nullptr },
-  /*22 feast  */ { N_CARD, "The Feast",
-                  "Tonight the steward pours for the Jarl's table. Your chance.",
-                  nullptr, nullptr, 23, 0, 0, 0, 0, 0, 0, nullptr, nullptr },
-  /*23 brew   */ { N_BREW, nullptr, nullptr, nullptr, nullptr,
-                  24, 0, 0, 0, 0, 0, 0, nullptr, &kBrewGoblet },
-  /*24 use    */ { N_CHOICE, "At the feast:", nullptr,
+                  nullptr, nullptr, 20, 0, 0, 0, 0, 0, 0, nullptr, nullptr },
+  /*19 midnight*/{ N_CARD, "Midnight",
+                  "Black petals fall from his sleeve. Tomorrow he pours at the feast.",
+                  nullptr, nullptr, 20, 0, 0, 0, 0, 0, 0, nullptr, nullptr },
+  /*20 recipe */{ N_SPEAK, "Healer Danica",   // the recipe, spoken first
+                  "Deathbell kills quick. Bound to the flower, pain LINGERS.",
+                  nullptr, nullptr, 21, 0, 0, 0, 0, 0, 0, drawHealer, nullptr },
+  /*21 title  */{ N_TITLE, "Feel the Vibes", nullptr, nullptr, nullptr,
+                  22, 0, 0, 0, 0, 0, 0, nullptr, nullptr },
+  /*22 brew   */{ N_BREW, nullptr, nullptr, nullptr, nullptr,
+                  23, 0, 0, 0, 0, 0, 0, nullptr, &kBrewGoblet },
+  /*23 use    */{ N_CHOICE, "At the feast:", nullptr,
                   "Lace his goblet", "Draw your blade",
-                  26, 25, 0, 0, 0, 0, 0, nullptr, nullptr },
-  /*25 seized */ { N_CARD, "Seized!",          // the blade is the trap here
+                  25, 24, 0, 0, 0, 0, 0, nullptr, nullptr },
+  /*24 seized */{ N_CARD, "Seized!",          // the blade is the trap here
                   "Guards see only a drawn blade. A cold night in the cells.",
-                  nullptr, nullptr, 24, 0, 0, 0, 0, 0, 0, nullptr, nullptr },
-  /*26 goblet */ { N_CARD, "The Goblet",
+                  nullptr, nullptr, 23, 0, 0, 0, 0, 0, 0, nullptr, nullptr },
+  /*25 goblet */{ N_CARD, "The Goblet",
                   "He drinks - and blackens. The hall gasps. Dying, he laughs...",
-                  nullptr, nullptr, 27, 0, 0, 0, 0, 0, 0, nullptr, nullptr },
-  /*27 dying  */ { N_SPEAK, "The Steward",     // dying words name his master
+                  nullptr, nullptr, 26, 0, 0, 0, 0, 0, 0, nullptr, nullptr },
+  /*26 dying  */{ N_SPEAK, "The Steward",     // dying words name his master
                   "You fools! Peryite avenges his loyal servants!",
-                  nullptr, nullptr, 28, 0, 0, 0, 0, 0, 0, drawSteward, nullptr },
-  /*28 peryite*/ { N_CARD, "Peryite",          // stakes go realm-wide
-                  "Plague god. His shrine smokes in the mountains. Act 3 awaits...",
-                  nullptr, nullptr, 29, 0, 0, 0, 0, 0, 0, nullptr, nullptr },
+                  nullptr, nullptr, 27, 0, 0, 0, 0, 0, 0, drawSteward, nullptr },
 
-  // ---- Act 3: The Cauldron -----------------------------------------------
-  /*29 shrine */ { N_CARD, "The Shrine",
-                  "Green smoke crowns the shrine. The Afflicted guard every path.",
-                  nullptr, nullptr, 30, 0, 0, 0, 0, 0, 0, nullptr, nullptr },
-  /*30 recipe */ { N_SPEAK, "Healer Danica",   // act 3 recipe, spoken first
+  // ---- Act 3 (internal): The Cauldron -------------------------------------
+  /*27 title  */{ N_TITLE, "Defeat Peryite", nullptr, nullptr, nullptr,
+                  28, 0, 0, 0, 0, 0, 0, nullptr, nullptr },
+  /*28 peryite*/{ N_CARD, "Peryite",          // stakes + destination in one card
+                  "Plague god. His shrine crowns the peak - the Afflicted guard every path.",
+                  nullptr, nullptr, 29, 0, 0, 0, 0, 0, 0, nullptr, nullptr },
+  /*29 recipe */{ N_SPEAK, "Healer Danica",   // the recipe, spoken first
                   "The Philter hides you. ALL THREE bottles, alchemist.",
-                  nullptr, nullptr, 31, 0, 0, 0, 0, 0, 0, drawHealer, nullptr },
-  /*31 philter*/ { N_BREW, nullptr, nullptr, nullptr, nullptr,
+                  nullptr, nullptr, 30, 0, 0, 0, 0, 0, 0, drawHealer, nullptr },
+  /*30 title  */{ N_TITLE, "Go Invisible", nullptr, nullptr, nullptr,
+                  31, 0, 0, 0, 0, 0, 0, nullptr, nullptr },
+  /*31 philter*/{ N_BREW, nullptr, nullptr, nullptr, nullptr,
                   32, 0, 0, 0, 0, 0, 0, nullptr, &kBrewPhantom },
-  /*32 sneak  */ { N_SCENE, nullptr, nullptr, nullptr, nullptr,   // invisible
+  /*32 sneak  */{ N_SCENE, nullptr, nullptr, nullptr, nullptr,   // invisible
                   33, 0, 0, 0, 0, 0, 5600, drawSneak, nullptr },
-  /*33 cauldron*/{ N_CARD, "The Cauldron",     // the taunt IS the clue
+  /*33 cauldron*/{ N_CARD, "The Cauldron",    // the taunt IS the clue
                   "It seethes. The Afflicted chant: 'No flower mends THIS.' One pour - one chance.",
                   nullptr, nullptr, 34, 0, 0, 0, 0, 0, 0, nullptr, nullptr },
-  /*34 use    */ { N_CHOICE, "The great cauldron:", nullptr,
+  /*34 use    */{ N_CHOICE, "The great cauldron:", nullptr,
                   "Tip it over", "Counter-brew it",
                   35, 36, 0, 0, 0, 0, 0, nullptr, nullptr },
-  /*35 spilled*/ { N_CARD, "Spilled!",         // force is the trap, one last time
+  /*35 spilled*/{ N_CARD, "Spilled!",         // force is the trap, one last time
                   "It floods the floor - the mist rises hungry. You flee to try again.",
                   nullptr, nullptr, 34, 0, 0, 0, 0, 0, 0, nullptr, nullptr },
-  /*36 counter*/ { N_BREW, nullptr, nullptr, nullptr, nullptr,   // ONE SHOT:
+  /*36 counter*/{ N_BREW, nullptr, nullptr, nullptr, nullptr,   // ONE SHOT:
                   37, 41, 0, 0, 0, 0, 0, nullptr, &kBrewCounter },  // wrong -> 41
-  /*37 poured */ { N_CARD, "The Counter-Brew", // act 1's flower saves the realm
+  /*37 poured */{ N_CARD, "The Counter-Brew", // act 1's flower saves the realm
                   "The flower falls in. The cauldron clears... Peryite SCREAMS.",
                   nullptr, nullptr, 38, 0, 0, 0, 0, 0, 0, nullptr, nullptr },
-  /*38 saved  */ { N_CARD, "The Rivers Run Clear",
-                  "Skyrim drinks clean. Whiterun hails you.",
-                  nullptr, nullptr, 39, 0, 0, 99, 0, 0, 0, nullptr, nullptr },
-  /*39 jarl   */ { N_SPEAK, "Jarl Balgruuf",   // the act 1 line, paid off
+  /*38 title  */{ N_TITLE, "The Rivers Run Clear", nullptr, nullptr, nullptr,
+                  39, 0, 0, 0, 0, 0, 0, nullptr, nullptr },  // victory, announced
+  /*39 jarl   */{ N_SPEAK, "Jarl Balgruuf",   // the act-1 line, paid off
                   "You mended more than flesh. Skyrim owes you, alchemist.",
                   nullptr, nullptr, 40, 0, 0, 0, 0, 0, 0, drawJarl, nullptr },
-  /*40 the end*/ { N_CARD, "The End",          // and a tease for other realms
-                  "Your study glows warm. Seven realms await new tales...",
-                  nullptr, nullptr, 15, 0, 0, 0, 0, 0, 0, nullptr, nullptr },
-  /*41 wrong  */ { N_CARD, "The Wrong Brew",   // the exam, failed
+  /*40 the end*/{ N_CARD, "The End",          // hail + a tease for other realms
+                  "Whiterun hails you. Your study glows warm. Seven realms await new tales...",
+                  nullptr, nullptr, 43, 0, 0, 0, 0, 0, 0, nullptr, nullptr },
+  /*41 wrong  */{ N_CARD, "The Wrong Brew",   // the exam, failed
                   "The cauldron drinks it - and ROARS. The mist pours into the night.",
                   nullptr, nullptr, 42, 0, 0, 0, 0, 0, 0, nullptr, nullptr },
-  /*42 bad end*/ { N_CARD, "Peryite Prevails", // fail forward: whisper the clue
+  /*42 bad end*/{ N_CARD, "Peryite Prevails", // fail forward: whisper the clue
                   "Skyrim's rivers run grey. The Jarl's words linger. The cauldron waits.",
-                  nullptr, nullptr, 15, 0, 0, 0, 0, 0, 0, nullptr, nullptr },
+                  nullptr, nullptr, 43, 0, 0, 0, 0, 0, 0, nullptr, nullptr },
+  /*43 end    */{ N_END, nullptr, nullptr, nullptr, nullptr,
+                  0, 0, 0, 0, 0, 0, 0, nullptr, nullptr },
 };
 
 // reed debounce / latch
@@ -1135,6 +1140,8 @@ static void storyPress() {
     case N_SCENE:
       storyGoto(n.nextA);                    // impatient? skip the cinematic
       break;
+    case N_TITLE:
+      break;   // announcements don't take input: they flash and move on
     case N_BREW:
       break;   // unreachable: the brew states own the button while brewing
     case N_CHOICE: {
@@ -1190,6 +1197,10 @@ static void updateStory(uint32_t now, uint32_t dt) {
   }
   if (n.kind == N_SCENE) {
     if (now - g_stateMs >= n.ms) storyGoto(n.nextA);
+    return;
+  }
+  if (n.kind == N_TITLE) {                 // announcement: plays, then moves on
+    if (now - g_stateMs >= TITLE_MS) storyGoto(n.nextA);
     return;
   }
   if (n.kind != N_BATTLE) return;      // cards/choices advance on press
@@ -2924,6 +2935,18 @@ static void renderSkillSelect() {
   oled.sendBuffer();
 }
 
+// Full-screen announcement: one-to-three words in the big serif inside the
+// double frame, inverting four times (XOR box) before settling.
+static void renderStoryTitle(const char* t, uint32_t el) {
+  drawFancyFrame();
+  drawFitted(t, kSerifFonts, 3, 112, 38, 30, 48);
+  if (el < 8 * TITLE_FLASH_MS && ((el / TITLE_FLASH_MS) & 1)) {
+    oled.setDrawColor(2);          // XOR: whole-screen invert
+    oled.drawBox(0, 0, 128, 64);
+    oled.setDrawColor(1);
+  }
+}
+
 static void renderStory(uint32_t now) {
   if (s_skillSel) { renderSkillSelect(); return; }
   if (s_storyPause) { renderStoryPause(now); return; }
@@ -2955,6 +2978,9 @@ static void renderStory(uint32_t now) {
       drawCenteredF(n.title, 50);
       oled.setFont(u8g2_font_5x8_tr);
       drawCenteredF("press to stop", 62);
+      break;
+    case N_TITLE:
+      renderStoryTitle(n.title, now - g_stateMs);
       break;
     case N_SCENE:
       if (n.art) n.art(64, 32, now);         // full-screen cinematic

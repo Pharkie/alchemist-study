@@ -837,6 +837,15 @@ def splash_final(s, now):
     twinkles(s, now)
 
 
+def story_title(s, text, el=2000):
+    fancy_frame(s)
+    draw_fitted(s, text, 112, 38, 30, 48)
+    if el < 8 * 120 and (el // 120) & 1:
+        s.set_draw_color(2)
+        s.draw_box(0, 0, 128, 64)
+        s.set_draw_color(1)
+
+
 def skill_select(s, idx=1):
 
     s.draw_hline(44, 12, 40)
@@ -894,12 +903,10 @@ def build():
     shot(lambda s: choice_scene(s, now, "The fire burns low...", "Play the lute", 2))
     shot(lambda s: tune(s, now))
     shot(lambda s: campfire(s, 4200))
-    shot(lambda s: story_card(s, "Act 2",
-                              "You wake healed. Yet the rat bite weeps...", 100,
-                              show_hp=True, php=30))
     shot(lambda s: speak(s, "Healer Danica",
-                         "Deathbell rot. No rat carries this. Something FED it.",
+                         "The bite weeps. Deathbell rot. Something FED that rat.",
                          now, art=healer))
+    shot(lambda s: story_title(s, "Feel the Vibes"))
     shot(lambda s: story_card(s, "The Granary",
                               "Black petals in the grain. One man holds the key: the steward.", 100))
     shot(lambda s: choice_scene(s, now, "The steward...", "Watch the granary", 2))
@@ -909,16 +916,14 @@ def build():
     shot(lambda s: speak(s, "The Steward",
                          "You fools! Peryite avenges his loyal servants!", now, art=steward))
     shot(lambda s: story_card(s, "Peryite",
-                              "Plague god. His shrine smokes in the mountains. Act 3 awaits...", 100))
+                              "Plague god. His shrine crowns the peak - the Afflicted guard every path.", 100))
     shot(lambda s: brew(s, [], "'all three bottles as one'", title="Brew: the Philter"))
     shot(lambda s: sneak(s, 2600))
     shot(lambda s: choice_scene(s, now, "The great cauldron:", "Counter-brew it", 2))
     shot(lambda s: brew(s, [], "'what quenches a plague?'", title="Brew: the counter"))
     shot(lambda s: story_card(s, "Peryite Prevails",
                               "Skyrim's rivers run grey. The Jarl's words linger. The cauldron waits.", 100))
-    shot(lambda s: story_card(s, "The Rivers Run Clear",
-                              "Skyrim drinks clean. Whiterun hails you.", 100,
-                              show_hp=True, php=30))
+    shot(lambda s: story_title(s, "The Rivers Run Clear"))
     shot(lambda s: speak(s, "Jarl Balgruuf",
                          "You mended more than flesh. Skyrim owes you, alchemist.", now))
     # Brewing acts (minigames): act 2 attuning + act 3 ritual phases.
@@ -948,6 +953,8 @@ def build():
     shot(lambda s: settings_menu(s, 1, editing=True))
     shot(lambda s: diag(s))
     shot(lambda s: splash_final(s, now))
+    shot(lambda s: story_title(s, "Rat Battle"))
+    shot(lambda s: story_title(s, "Rat Battle", el=130))   # mid-flash, inverted
     return shots
 
 

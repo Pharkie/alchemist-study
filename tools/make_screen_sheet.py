@@ -49,10 +49,10 @@ SECTIONS = [
         (19, "Rest choice (2 gp left)"),
         (20, "Playing the lute"),
         (21, "Campfire scene (sleep)"),
-        (22, "Act 2 — awake, full HP"),
+        (22, "Danica: wake + diagnosis in one"),
     ]),
     ("Act 2 — The Steward's Goblet", [
-        (23, "Danica diagnoses the bite"),
+        (23, "Title card — Feel the Vibes"),
         (24, "The granary card"),
         (25, "Confront or watch"),
         (26, "Brew the lingering poison"),
@@ -66,7 +66,7 @@ SECTIONS = [
         (32, "The cauldron — final use-choice"),
         (33, "The final exam — one pour"),
         (34, "Bad ending (wrong brew)"),
-        (35, "Realm saved"),
+        (35, "Victory title — The Rivers Run Clear"),
         (36, "The Jarl's bookend"),
     ]),
     ("Brewing acts — the minigames", [
@@ -103,6 +103,10 @@ SECTIONS = [
         (59, "Settings — editing a value"),
         (60, "Hardware Test (in-firmware)"),
         (61, "Boot splash — final frame"),
+    ]),
+    ("Title cards (flash announcements)", [
+        (62, "Rat Battle — settled"),
+        (63, "Rat Battle — mid-flash (inverted)"),
     ]),
 ]
 

@@ -114,11 +114,21 @@ story's 1 → 2 → 3 bottle escalation walks the player up all three.
   is act 1's healing flower (001) → realm saved, Jarl bookend. Brews escalate
   1 → 2 → 3 bottles then back to 1. Built on a **data-driven story
   engine**: a story is a table of `StoryNode`s (card / **speak** / choice /
-  tune / scene / **brew** / battle / end) linked by successor indices, so
+  tune / scene / **title** / **brew** / battle / end) linked by successor indices, so
   acts and universes are pure data (`kStorySkyrim`). `N_BREW` runs the brew
   machinery outside battle (wrong potion named, retried at leisure, no
   backing out). **Recipe rule:** every act's target recipe is SPOKEN in
   dialogue before the brew and repeated as the brew-screen hint.
+  **Title cards (`N_TITLE`):** one-to-three words in the big serif inside
+  the double frame, inverting four times then settling (~2.4 s), NO press —
+  they announce what's next ("Rat Battle", "Feel the Vibes", "Go
+  Invisible", "Defeat Peryite", and the victory "The Rivers Run Clear")
+  and auto-advance. **Pacing rule:** never more than TWO press-through
+  text screens (cards/speaks) in a row — titles, choices, scenes and brews
+  are the punctuation; condense or cut copy rather than stack it.
+  **"Act" is internal vocabulary only** — comments and docs may say act
+  1/2/3, but the player never reads the word; days end diegetically (the
+  campfire closes day one).
   **Build gates (don't bypass them):** contracts that used to be prose are
   enforced by PlatformIO pre-scripts — a violation FAILS the build naming
   the offender. `tools/check_story_text.py`: authored story text
