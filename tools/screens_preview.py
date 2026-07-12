@@ -702,8 +702,8 @@ def build():
     shot(lambda s: sneak(s, 2600))
     shot(lambda s: choice_scene(s, now, "The great cauldron:", "Counter-brew it", 2))
     shot(lambda s: brew(s, [], "'what quenches a plague?'", title="Brew: the counter"))
-    shot(lambda s: story_card(s, "Bad Ending",
-                              "Skyrim's rivers run grey. Remember the Jarl's words... and try again.", 100))
+    shot(lambda s: story_card(s, "Peryite Prevails",
+                              "Skyrim's rivers run grey. The Jarl's words linger. The cauldron waits.", 100))
     shot(lambda s: story_card(s, "Realm Saved",
                               "Skyrim drinks clean. The Jarl names you Alchemist of Whiterun.", 100,
                               show_hp=True, php=30))

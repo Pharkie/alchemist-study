@@ -470,8 +470,8 @@ static const StoryNode kStorySkyrim[] = {
   /*41 wrong  */ { N_CARD, "The Wrong Brew",   // the exam, failed
                   "The cauldron drinks it - and ROARS. The mist pours into the night.",
                   nullptr, nullptr, 42, 0, 0, 0, 0, 0, 0, nullptr, nullptr },
-  /*42 bad end*/ { N_CARD, "Bad Ending",       // fail forward: whisper the clue
-                  "Skyrim's rivers run grey. Remember the Jarl's words... and try again.",
+  /*42 bad end*/ { N_CARD, "Peryite Prevails", // fail forward: whisper the clue
+                  "Skyrim's rivers run grey. The Jarl's words linger. The cauldron waits.",
                   nullptr, nullptr, 15, 0, 0, 0, 0, 0, 0, nullptr, nullptr },
 };
 
