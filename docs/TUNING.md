@@ -112,7 +112,8 @@ idle screen; turn to move, press to edit a value, turn to change, press to
 confirm — a long-press cancels the edit and reverts the value): **Realm**,
 **Volume** (0–5, 0 = mute; loudness = LEDC duty via `kVolDuty`), **Brightness**
 (1–5), **Sleep**
-(screen-blank timeout), **Hardware Test**, **Firmware**, **Exit**. Difficulty
+(screen-blank timeout), **Stats** (lifetime brews + quest wins per skill),
+**Hardware Test**, **Firmware**, **Exit**. Difficulty
 moved out of the menu: every quest opens with "Your skill, alchemist?"
 (Apprentice/Graduate/Professor -> `g_stirLevelIdx` 0/1/2, persisted). Realm, Volume,
 Brightness and Sleep persist to NVS (written on confirm, not per

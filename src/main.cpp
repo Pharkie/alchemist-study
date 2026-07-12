@@ -176,7 +176,7 @@ Preferences prefs;
 static bool g_haveDisplay = false;  // set at boot; if false we run headless
 
 // ---- Runtime state -----------------------------------------------------
-enum State { ST_IDLE, ST_IDENTIFY, ST_STIRRING, ST_RITUAL, ST_REVEAL, ST_STORY, ST_SETTINGS, ST_DIAG };
+enum State { ST_IDLE, ST_IDENTIFY, ST_STIRRING, ST_RITUAL, ST_REVEAL, ST_STORY, ST_SETTINGS, ST_DIAG, ST_STATS };
 static uint32_t g_now      = 0;            // single time source: millis() sampled once per loop
 static State    g_state    = ST_IDLE;
 static uint32_t g_stateMs  = 0;            // g_now when the current state/phase began
@@ -187,6 +187,9 @@ static Universe g_universe = UNI_SKYRIM;
 static uint8_t  g_volume      = 3;         // 0 = mute .. 5 = full (LEDC duty)
 static uint8_t  g_brightness  = 3;         // 1..5
 static uint8_t  g_stirLevelIdx = 1;        // skill: 0 Apprentice / 1 Graduate / 2 Professor
+// Lifetime stats (NVS-persisted on every increment — rare events).
+static uint32_t g_statBrews   = 0;         // every potion made, right or wrong
+static uint16_t g_statWins[3] = { 0, 0, 0 };   // quest completions per skill
 static uint8_t  g_blankIdx     = 0;        // screen-blank timeout (index into kBlankMs/kBlankLabels)
 static uint32_t g_lastActivityMs = 0;      // last input (encoder/reed/button), for blanking
 static bool     g_screenOff    = false;    // true while the panel is blanked (asleep)
@@ -288,6 +291,7 @@ static constexpr uint32_t STORY_PAUSE_MS = 15000;
 // play and move on. Keeps runs of press-through text short (max two in a row).
 static constexpr uint32_t TITLE_FLASH_MS = 120;    // one invert phase (x8 = 4 flashes)
 static constexpr uint32_t TITLE_MS       = 2400;   // total on-screen time
+static int8_t s_titleThump = -1;                   // last flash thump sounded
 // Skill select — every quest OPENS by asking, so difficulty is never hidden
 // in a menu. The chosen index IS g_stirLevelIdx (persisted), so free play
 // inherits the last skill sworn at a quest start.
@@ -600,6 +604,9 @@ static const Note MEL_SYM_CW[]    = { {880, 240} };               // turn right 
 static const Note MEL_SYM_CCW[]   = { {392, 240} };               // turn left  = low
 static const Note MEL_SYM_PRESS[] = { {587, 240} };               // press      = mid
 static const Note MEL_RITBEGIN[]  = { {330, 140}, {392, 140}, {494, 220} }; // mystic rise
+// Title-card stings: one low thump per flash, rising — far below the ritual
+// voices (392/587/880) so announcement audio can never read as puzzle audio.
+static const Note MEL_TITLE_THUMPS[4] = { {98, 70}, {110, 70}, {123, 70}, {147, 90} };
 // NOTE: no verse-complete jingle. The symbol notes ARE the puzzle (the final
 // verse is answered by ear alone), so nothing melodic may share the channel —
 // the RI_GOOD screen confirms visually and the last answer's echo rings free.
@@ -785,7 +792,8 @@ static void onSensedComboChange() {
   // and the reveal end call enterCombo with the sensed combo). REVEAL falls
   // through to the latch logic below, so a flaky reed still can't disrupt it
   // but a genuinely added bottle restarts.
-  if (g_state == ST_SETTINGS || g_state == ST_DIAG || g_state == ST_STORY) return;
+  if (g_state == ST_SETTINGS || g_state == ST_DIAG || g_state == ST_STATS ||
+      g_state == ST_STORY) return;
 
   if (raw == 0) {                    // base emptied: latch it; never bail instantly
     s_baseEmptied = true;
@@ -848,7 +856,8 @@ static void storyGoto(int idx) {
     s_php += n.heal;                       // 99 = "restore to full" in practice
     if (s_php > PLAYER_MAX_HP) s_php = PLAYER_MAX_HP;
   }
-  if      (n.kind == N_BATTLE) { s_bdef = n.battle; battleReset(); }
+  if      (n.kind == N_TITLE)  s_titleThump = -1;   // fresh flash sequence
+  else if (n.kind == N_BATTLE) { s_bdef = n.battle; battleReset(); }
   else if (n.kind == N_BREW)   { s_bdef = n.battle; storyBrewStart(); }
   else if (n.kind == N_CHOICE) s_choiceIdx = 0;
   else if (n.kind == N_END)    storyEnd();
@@ -916,13 +925,26 @@ static void storyBrewStart() {
   enterCombo(s_sensedCombo);
 }
 
+// ---- Lifetime stats ------------------------------------------------------
+static void statBrewed() {
+  g_statBrews++;
+  prefs.putUInt("st_brews", g_statBrews);
+}
+static void statQuestWon() {               // credit the skill sworn at quest start
+  static const char* const kWinKeys[3] = { "st_win0", "st_win1", "st_win2" };
+  g_statWins[g_stirLevelIdx]++;
+  prefs.putUShort(kWinKeys[g_stirLevelIdx], g_statWins[g_stirLevelIdx]);
+}
+
 static void storyBrewResolve() {
+  statBrewed();                            // right or wrong, a potion was made
   const StoryNode& n = s_story[s_node];
   bool ok = (g_combo == s_bdef->brewCombo);
   Serial.printf("[story] brew %s (combo %u)\n", ok ? "OK" : "wrong", g_combo);
 
   if (n.kind == N_BREW) {
     if (ok) {
+      if (n.nextB) statQuestWon();         // the one-shot exam passed = quest won
       s_storyBrew = false;
       startMelody(MEL_SUCCESS, ARRAY_COUNT(MEL_SUCCESS), g_now);
       enterState(ST_STORY);
@@ -970,6 +992,7 @@ static void storyBrewCancel() {
 
 // ---- Reveal kick-off (shared by the press path and the ritual) ----------
 static void startReveal(uint32_t now) {
+  statBrewed();
   s_revealPhase = RP_ANIM;
   s_revealStyle = (int)(esp_random() % 3);   // pick a random reveal animation
   enterState(ST_REVEAL);                     // stamps the phase clock
@@ -1200,7 +1223,13 @@ static void updateStory(uint32_t now, uint32_t dt) {
     return;
   }
   if (n.kind == N_TITLE) {                 // announcement: plays, then moves on
-    if (now - g_stateMs >= TITLE_MS) storyGoto(n.nextA);
+    uint32_t tel = now - g_stateMs;
+    int ph = (int)(tel / TITLE_FLASH_MS);
+    if ((ph & 1) && ph / 2 != s_titleThump && ph / 2 < 4) {
+      s_titleThump = (int8_t)(ph / 2);     // a thump lands on each invert
+      startMelody(&MEL_TITLE_THUMPS[s_titleThump], 1, now);
+    }
+    if (tel >= TITLE_MS) storyGoto(n.nextA);
     return;
   }
   if (n.kind != N_BATTLE) return;      // cards/choices advance on press
@@ -1324,6 +1353,7 @@ static void settingsExit()  { s_navAccum = 0; s_menuEditing = false; enterCombo(
                               // Back on the carousel, stay on the Settings panel.
                               if (g_state == ST_IDLE) { s_homePanel = HP_SETTINGS; s_homeX = (float)(PANEL_W * HP_SETTINGS); } }
 static void diagEnter()     { s_navAccum = 0; s_menuEditing = false; enterState(ST_DIAG); }
+static void statsEnter()    { s_navAccum = 0; s_menuEditing = false; enterState(ST_STATS); }
 
 // ---- Home carousel model -------------------------------------------------
 // One row per panel: its renderer and what a press does. Order must match the
@@ -1381,6 +1411,7 @@ static const MenuItem kMenu[] = {
   { "Volume",       K_RANGE,  getVolume,    setVolume,    persistVolume,    nullptr,       0,         0, 5, nullptr,    nullptr      },
   { "Bright",       K_RANGE,  getBright,    setBright,    persistBright,    nullptr,       0,         1, 5, nullptr,    nullptr      },
   { "Sleep",        K_CHOICE, getBlank,     setBlank,     persistBlank,     kBlankLabels,  kBlankN,   0, 0, nullptr,    nullptr      },
+  { "Stats",        K_ACTION, nullptr,      nullptr,      nullptr,          nullptr,       0,         0, 0, nullptr,    statsEnter   },
   { "Hardware Test",K_ACTION, nullptr,      nullptr,      nullptr,          nullptr,       0,         0, 0, nullptr,    diagEnter    },
   { "Firmware",     K_INFO,   nullptr,      nullptr,      nullptr,          nullptr,       0,         0, 0, FW_VERSION, nullptr      },
   { "Exit",         K_ACTION, nullptr,      nullptr,      nullptr,          nullptr,       0,         0, 0, nullptr,    settingsExit },
@@ -1509,6 +1540,7 @@ static void onLongPress(uint32_t now) {
       } else settingsExit();                     // ...otherwise leave the menu
       break;
     case ST_DIAG:     settingsEnter(); break;     // diagnostic back to the menu
+    case ST_STATS:    settingsEnter(); break;     // stats back to the menu
 #ifdef BENCH_SIM_COMBO
     case ST_IDLE:                                 // Place panel: fake all three
       if (s_homePanel == HP_PLACE) {
@@ -2373,6 +2405,30 @@ static void renderSettings() {
   oled.sendBuffer();
 }
 
+// Lifetime stats (Settings -> Stats): brews ever made, quests won per skill.
+static void renderStats() {
+  oled.clearBuffer();
+  drawTitleBar("Stats");
+  oled.setFont(u8g2_font_helvR08_tr);
+  const struct { const char* label; uint32_t n; } rows[] = {
+    { "Potions brewed",  g_statBrews },
+    { "Apprentice wins", g_statWins[0] },
+    { "Graduate wins",   g_statWins[1] },
+    { "Professor wins",  g_statWins[2] },
+  };
+  int y = 24;
+  for (auto& r : rows) {
+    oled.drawStr(4, y, r.label);
+    char v[12];
+    snprintf(v, sizeof(v), "%lu", (unsigned long)r.n);
+    oled.drawStr(124 - oled.getStrWidth(v), y, v);
+    y += 10;
+  }
+  oled.setFont(u8g2_font_5x8_tr);
+  drawCenteredF("hold knob to exit", 63);
+  oled.sendBuffer();
+}
+
 // Built-in live diagnostic (reachable from Settings -> Hardware Test).
 static void renderDiag() {
   oled.clearBuffer();
@@ -2864,10 +2920,18 @@ static void renderBattleRoll(uint32_t el) {
 static void renderStoryBattle(uint32_t now) {
   uint32_t el = now - g_stateMs;
   if (s_bp == BP_ROLL) { renderBattleRoll(el); return; }
-  drawHPBar(2, 0, "You", s_phpShown, PLAYER_MAX_HP);
-  drawHPBar(2, 10, s_bdef->name, s_ehpShown, s_bdef->enemyHP);
+  // Damage to YOU rattles the camera: a decaying jitter while the bite
+  // phase is young. Derived from the phase clock — no separate timer.
+  int shake = 0;
+  if ((s_bp == BP_BITE || s_bp == BP_MAULED) && el < 340) {
+    int amp = 3 - (int)(el / 120);                      // 3 -> 1 px
+    if (amp < 1) amp = 1;
+    shake = ((el / 30) & 1) ? amp : -amp;
+  }
+  drawHPBar(2 + shake, 0, "You", s_phpShown, PLAYER_MAX_HP);
+  drawHPBar(2 + shake, 10, s_bdef->name, s_ehpShown, s_bdef->enemyHP);
   int lunge = (s_bp == BP_BITE && el < 300) ? -8 : 0;   // the bite's pounce
-  s_bdef->sprite(72 + lunge, 34, now);
+  s_bdef->sprite(72 + lunge + shake, 34, now);
   if (s_bp == BP_CHOOSE) {
     drawChoiceLine(s_choiceIdx == 0
                        ? (s_numb ? "Attack (arm numb!)" : "Attack for 4-7")
@@ -3044,6 +3108,7 @@ static void render() {
     case ST_STORY:    renderStory(now);    break;
     case ST_SETTINGS: renderSettings();    break;
     case ST_DIAG:     renderDiag();        break;
+    case ST_STATS:    renderStats();       break;
   }
 }
 
@@ -3161,6 +3226,10 @@ void setup() {
   if (g_brightness > 5) g_brightness = 5;
   g_stirLevelIdx = prefs.getUChar("stirlvl", 1);
   if (g_stirLevelIdx >= kStirN) g_stirLevelIdx = 1;
+  g_statBrews   = prefs.getUInt("st_brews", 0);
+  g_statWins[0] = prefs.getUShort("st_win0", 0);
+  g_statWins[1] = prefs.getUShort("st_win1", 0);
+  g_statWins[2] = prefs.getUShort("st_win2", 0);
   g_blankIdx   = prefs.getUChar("blank", 1);            // default: 10m
   if (g_blankIdx >= kBlankN) g_blankIdx = 1;             // old 5-option index -> 10m
 

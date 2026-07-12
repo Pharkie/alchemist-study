@@ -108,6 +108,9 @@ SECTIONS = [
         (62, "Rat Battle — settled"),
         (63, "Rat Battle — mid-flash (inverted)"),
     ]),
+    ("Stats", [
+        (64, "Settings — Stats: brews + wins per skill"),
+    ]),
 ]
 
 

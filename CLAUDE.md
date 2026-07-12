@@ -277,6 +277,9 @@ Items are a data table (`kMenu` in `main.cpp`) of `{label, kind, get/set/persist
   down (`setPowerSave`) after that long with no input and wakes on any encoder /
   reed / button activity. A waking **turn or press is swallowed** so it doesn't
   also act; a **reed change still registers** (seating a bottle should count).
+- **Stats** — lifetime counters: potions brewed (every brew, right or wrong)
+  and quests won per skill (the one-shot final brew passing = a win). NVS-
+  persisted; long-press exits back to the menu.
 - **Hardware Test** — opens a built-in live diagnostic (`ST_DIAG`): reed/button
   boxes + encoder count; long-press to return. (Same idea as the `c3-hwcheck`
   build, but in-firmware so it needs no reflash.)

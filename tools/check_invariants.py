@@ -18,6 +18,8 @@ TUNING.md / code comments) and therefore rotted silently:
   strings  every multi-word display string the sim twin draws still
            exists in main.cpp — stale transliterations get flagged the
            moment the firmware copy changes
+  pacing   never 3+ press-through story screens (cards/speaks) in a row
+  vocab    player-facing story text never says act/level/minigame
   tuning   every `CONSTANT` | `value` table row in docs/TUNING.md matches
            the value in main.cpp (quoted numbers rot on every retune)
   docs     menu labels, potion and ingredient names all appear in
@@ -276,6 +278,66 @@ def check_twin_strings(errors, root, main_src):
                           f"— screens_preview.py has drifted from the firmware")
 
 
+# ---- story pacing & vocabulary ----------------------------------------------
+
+PRESS_THROUGH = {"N_CARD", "N_SPEAK"}
+# Player-facing text may never name the scaffolding.
+BANNED_VOCAB = [r"\bacts?\b", r"\bmini-?games?\b", r"\blevels?\b"]
+
+
+def check_pacing(errors, cst, src):
+    """Never 3+ press-through screens (cards/speaks) in a row — titles,
+    choices, scenes and brews are the punctuation (CLAUDE.md pacing rule)."""
+    nodes = parse_story_nodes(cst, src)
+    if not nodes:
+        return
+    def kind(i):
+        return nodes[i][0].strip() if 0 <= i < len(nodes) and nodes[i] else ""
+    def nxt(i):
+        try:
+            return int(nodes[i][5])
+        except (ValueError, IndexError):
+            return -1
+    for a in range(len(nodes)):
+        if kind(a) not in PRESS_THROUGH:
+            continue
+        b = nxt(a)
+        if kind(b) not in PRESS_THROUGH:
+            continue
+        c = nxt(b)
+        if kind(c) in PRESS_THROUGH:
+            errors.append(f"pacing: nodes {a} -> {b} -> {c} are three press-through "
+                          f"screens in a row — insert a title/choice/scene or condense")
+
+
+def check_vocab(errors, cst, src):
+    """Ban scaffolding words from player-facing story strings."""
+    nodes = parse_story_nodes(cst, src)
+    if nodes:
+        for i, f in enumerate(nodes):
+            for fi in (1, 2, 3, 4):     # title, body, optA, optB
+                t = cst.field_str(f[fi]) if fi < len(f) else None
+                if not t:
+                    continue
+                for pat in BANNED_VOCAB:
+                    if re.search(pat, t, re.I):
+                        errors.append(f'vocab: node {i} says "{t}" — banned word '
+                                      f"({pat}); acts/levels are internal vocabulary")
+    for m in re.finditer(r"BattleDef\s+(\w+)\s*=\s*", src):
+        f = split_fields_of(cst, src, m)
+        for fi, what in ((1, "intro"), (6, "brewTitle"), (7, "hint")):
+            t = cst.field_str(f[fi]) if fi < len(f) else None
+            if not t:
+                continue
+            for pat in BANNED_VOCAB:
+                if re.search(pat, t, re.I):
+                    errors.append(f"vocab: {m.group(1)} {what} \"{t}\" — banned word ({pat})")
+
+
+def split_fields_of(cst, src, m):
+    return cst.split_fields(cst.extract_braced(src, src.index("{", m.end())))
+
+
 # ---- TUNING.md quoted values vs code ----------------------------------------
 
 def scalar_const(src, name):
@@ -357,6 +419,8 @@ def run(root):
     check_pins(errors, root)
     check_twins(errors, root, main_src)
     check_twin_strings(errors, root, main_src)
+    check_pacing(errors, cst, main_src)
+    check_vocab(errors, cst, main_src)
     check_tuning(errors, root, main_src)
     check_docs(errors, root, main_src)
     return errors
@@ -374,7 +438,7 @@ def main(root=None):
               f"tools/check_invariants.py)", file=sys.stderr)
         raise SystemExit(1)
     print("[check_invariants] OK — graph, battle maths, stir tables, pin docs, "
-          "d20 twins, twin strings, TUNING values, doc tables all consistent")
+          "d20 twins, twin strings, pacing, vocab, TUNING values, doc tables all consistent")
 
 
 # PlatformIO extra_scripts pre-action. The try guards ONLY the Import probe —

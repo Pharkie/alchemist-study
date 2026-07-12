@@ -811,6 +811,21 @@ def settings_menu(s, sel=1, editing=False):
     s.draw_box(125, ty, 3, thumb_h)
 
 
+def stats_screen(s):
+    title_bar(s, "Stats")
+    s.set_font("helvR08")
+    rows = [("Potions brewed", 123), ("Apprentice wins", 2),
+            ("Graduate wins", 1), ("Professor wins", 0)]
+    y = 24
+    for label, n in rows:
+        s.draw_str(4, y, label)
+        v = str(n)
+        s.draw_str(124 - s.get_str_width(v), y, v)
+        y += 10
+    s.set_font("5x8")
+    s.draw_centered("hold knob to exit", 63)
+
+
 def diag(s, enc=12):
     title_bar(s, "Hardware Test")
     s.set_font("helvR08")
@@ -955,6 +970,7 @@ def build():
     shot(lambda s: splash_final(s, now))
     shot(lambda s: story_title(s, "Rat Battle"))
     shot(lambda s: story_title(s, "Rat Battle", el=130))   # mid-flash, inverted
+    shot(lambda s: stats_screen(s))
     return shots
 
 
