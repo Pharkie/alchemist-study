@@ -47,7 +47,7 @@ Inside the tolerance band the bar fills; outside it drains. Per stir level:
 | `kAlignTol[]` | `0.80 / 0.60 / 0.45` | tolerance band, radians either side, before the shrink. Size it by reaction time: tol / ramped drift speed should stay a few tenths of a second (bench-tuned: half these values read as "only counts when bang on"). |
 | `kAlignDrift[]` | `0.90 / 1.40 / 2.00` | max drift speed (rad/s), before the ramp; a new heading every `ALIGN_RETARGET_MS`. |
 | `kAlignFill[]` | `0.30 / 0.22 / 0.16` | bar added per **aligned** second (~3.3/4.5/6.3 s of aligned time). |
-| `kAlignDrain[]` | `0.10 / 0.14 / 0.20` | bar drained per misaligned second — parking the knob loses. |
+| `kAlignDrain[]` | `0.07 / 0.10 / 0.14` | bar drained per misaligned second — parking the knob loses. |
 | `ALIGN_KNOB_STEP` | `0.05` | phase radians per encoder count (higher = twitchier knob). |
 | `ALIGN_RETARGET_MS` | `700` | how often the drift re-rolls its heading. |
 | `ALIGN_FLIP_P` | `0.25` | chance a re-roll reverses direction — the rest keep it, so the target genuinely travels. |

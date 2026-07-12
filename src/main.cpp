@@ -1186,7 +1186,7 @@ static constexpr int      kStirN        = 3;
 static const float        kAlignTol[]   = { 0.80f, 0.60f, 0.45f };  // radians either side, before the shrink
 static const float        kAlignDrift[] = { 0.90f, 1.40f, 2.00f };  // max drift speed (rad/s), before the ramp
 static const float        kAlignFill[]  = { 0.30f, 0.22f, 0.16f };  // bar added per aligned sec
-static const float        kAlignDrain[] = { 0.10f, 0.14f, 0.20f };  // bar drained per misaligned sec
+static const float        kAlignDrain[] = { 0.07f, 0.10f, 0.14f };  // bar drained per misaligned sec
 
 static void applyBrightness() {
   if (g_haveDisplay) oled.setContrast((uint8_t)map(g_brightness, 1, 5, 16, 255));
