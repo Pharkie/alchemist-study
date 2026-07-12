@@ -1271,9 +1271,10 @@ static void persistStirLevel(){ prefs.putUChar("stirlvl", g_stirLevelIdx); }
 
 // Screen-blank (screensaver) timeout. Index 0 = Never; the panel powers down
 // after this much input idle and wakes on any encoder/reed/button activity.
-static const char* const kBlankLabels[] = { "Never", "10s", "1m", "5m", "30m" };
-static const uint32_t    kBlankMs[]     = { 0, 10000UL, 60000UL, 300000UL, 1800000UL };
-static constexpr int     kBlankN        = 5;
+// No "Never": an always-on OLED burns in, and 12h is never-enough in practice.
+static const char* const kBlankLabels[] = { "1m", "10m", "60m", "12h" };
+static const uint32_t    kBlankMs[]     = { 60000UL, 600000UL, 3600000UL, 43200000UL };
+static constexpr int     kBlankN        = 4;
 static int  getBlank()       { return g_blankIdx; }
 static void setBlank(int v)  { g_blankIdx = (uint8_t)v; }
 static void persistBlank()   { prefs.putUChar("blank", g_blankIdx); }
@@ -3092,8 +3093,8 @@ void setup() {
   if (g_brightness > 5) g_brightness = 5;
   g_stirLevelIdx = prefs.getUChar("stirlvl", 1);
   if (g_stirLevelIdx >= kStirN) g_stirLevelIdx = 1;
-  g_blankIdx   = prefs.getUChar("blank", 0);
-  if (g_blankIdx >= kBlankN) g_blankIdx = 0;
+  g_blankIdx   = prefs.getUChar("blank", 1);            // default: 10m
+  if (g_blankIdx >= kBlankN) g_blankIdx = 1;             // old 5-option index -> 10m
 
   // OLED. Let U8g2 own the single Wire.begin(); we only preset the C3's I2C
   // pins (calling Wire.begin() ourselves AND letting U8g2 begin() again wedges

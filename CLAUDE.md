@@ -250,7 +250,8 @@ Items are a data table (`kMenu` in `main.cpp`) of `{label, kind, get/set/persist
 - **Bright** — 1–5 (OLED contrast via `setContrast`)
 - **Difficulty** — Easy / Medium / Hard (fill difficulty curve; NVS key and
   code identifiers still say `stir`/`g_stirLevelIdx`)
-- **Sleep** — screen-blank timeout: Never / 10s / 1m / 5m / 30m. The OLED powers
+- **Sleep** — screen-blank timeout: 1m / 10m / 60m / 12h (no "Never" — an
+  always-on OLED burns in). The OLED powers
   down (`setPowerSave`) after that long with no input and wakes on any encoder /
   reed / button activity. A waking **turn or press is swallowed** so it doesn't
   also act; a **reed change still registers** (seating a bottle should count).
