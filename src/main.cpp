@@ -151,6 +151,8 @@ static constexpr uint32_t RIT_INTRO_MS         = 1800;  // "The Grand Brew" card
 static constexpr uint32_t RIT_GLYPH_MS         = 650;   // per glyph while the incantation plays
 static constexpr uint32_t RIT_GOOD_MS          = 900;   // "well stirred" between verses
 static constexpr uint32_t RIT_MISS_MS          = 1200;  // "it resists" before a replay
+static constexpr uint32_t RIT_ECHO_MS          = 280;   // let the last answer's note ring
+                                                        // before the interlude jingle takes the buzzer
 static constexpr uint32_t RIT_INPUT_TIMEOUT_MS = 12000; // stalled answer -> replay the verse
 static constexpr int32_t  RIT_TURN_COUNTS      = 4;     // counts (~1 detent) per turn answer
 static constexpr int      RIT_SEQ_LEN          = 4;     // full incantation length
@@ -547,6 +549,8 @@ static int      s_ritRound    = 0;         // current verse (0..RIT_ROUNDS-1)
 static int      s_ritShowIdx  = -1;        // glyph last sounded while showing
 static int      s_ritInputIdx = 0;         // how many answers given this verse
 static int32_t  s_ritAccum    = 0;         // encoder counts toward a turn answer
+static bool     s_ritDone     = false;     // final verse answered; GOOD leads to the reveal
+static bool     s_ritChimed   = false;     // interlude jingle started (delayed past the echo)
 
 // button
 static bool     s_btnDown   = false;
@@ -961,6 +965,7 @@ static void ritShowBegin(uint32_t now) {
 static void ritualEnter(uint32_t now) {
   for (int i = 0; i < RIT_SEQ_LEN; i++) s_ritSeq[i] = (uint8_t)(esp_random() % 3);
   s_ritRound = 0;
+  s_ritDone = false;
   s_ritPhase = RI_INTRO;
   enterState(ST_RITUAL);
   startMelody(MEL_RITBEGIN, ARRAY_COUNT(MEL_RITBEGIN), now);
@@ -968,27 +973,25 @@ static void ritualEnter(uint32_t now) {
 }
 
 // One answer (turn or press) during RI_INPUT. Echoes the symbol's note, then
-// advances the verse, finishes the ritual, or flags a miss.
+// advances the verse, finishes the ritual, or flags a miss. The interlude
+// jingle/buzz is NOT started here — startMelody would steal the buzzer from
+// the echo just played; updateRitual starts it after RIT_ECHO_MS.
 static void ritInput(uint8_t sym, uint32_t now) {
   if (s_ritPhase != RI_INPUT) return;
   playSymTone(sym, now);
   if (sym != s_ritSeq[s_ritInputIdx]) {
     s_ritPhase = RI_MISS;
     g_stateMs = now;
-    startMelody(MEL_NOTREADY, ARRAY_COUNT(MEL_NOTREADY), now);
+    s_ritChimed = false;
     return;
   }
   s_ritInputIdx++;
   g_stateMs = now;                      // each answer refreshes the stall timeout
   if (s_ritInputIdx < ritRoundLen()) return;
-  if (s_ritRound >= RIT_ROUNDS - 1) {   // incantation complete
-    if (s_storyBrew) storyBrewResolve();   // the story judges the brew
-    else startReveal(now);
-  } else {
-    s_ritPhase = RI_GOOD;
-    g_stateMs = now;
-    startMelody(MEL_RITGOOD, ARRAY_COUNT(MEL_RITGOOD), now);
-  }
+  s_ritPhase = RI_GOOD;                 // verse (maybe the whole incantation) done
+  g_stateMs = now;
+  s_ritChimed = false;
+  s_ritDone = (s_ritRound >= RIT_ROUNDS - 1);
 }
 
 static void updateRitual(uint32_t now, int32_t d) {
@@ -1023,9 +1026,25 @@ static void updateRitual(uint32_t now, int32_t d) {
       if (now - g_stateMs >= RIT_INPUT_TIMEOUT_MS) ritShowBegin(now);  // lost? hear it again
       break;
     case RI_GOOD:
-      if (el >= RIT_GOOD_MS) { s_ritRound++; ritShowBegin(now); }
+      if (!s_ritChimed && el >= RIT_ECHO_MS) {   // echo first, then the jingle
+        s_ritChimed = true;
+        startMelody(MEL_RITGOOD, ARRAY_COUNT(MEL_RITGOOD), now);
+      }
+      if (el >= RIT_GOOD_MS) {
+        if (s_ritDone) {                         // incantation complete
+          if (s_storyBrew) storyBrewResolve();   // the story judges the brew
+          else startReveal(now);
+        } else {
+          s_ritRound++;
+          ritShowBegin(now);
+        }
+      }
       break;
     case RI_MISS:
+      if (!s_ritChimed && el >= RIT_ECHO_MS) {   // hear your wrong note, THEN the buzz
+        s_ritChimed = true;
+        startMelody(MEL_NOTREADY, ARRAY_COUNT(MEL_NOTREADY), now);
+      }
       if (el >= RIT_MISS_MS) ritShowBegin(now);
       break;
   }
@@ -2177,9 +2196,9 @@ static void renderRitual(uint32_t now) {
     case RI_GOOD:
       drawCornerSparkles(now);
       oled.setFont(u8g2_font_ncenB12_tr);
-      drawCenteredF("Well stirred!", 34);
+      drawCenteredF(s_ritDone ? "It is done!" : "Well stirred!", 34);
       oled.setFont(u8g2_font_5x8_tr);
-      drawCenteredF("the brew deepens...", 56);
+      drawCenteredF(s_ritDone ? "the incantation holds..." : "the brew deepens...", 56);
       break;
 
     case RI_MISS:
