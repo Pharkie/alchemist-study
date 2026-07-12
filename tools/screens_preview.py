@@ -634,7 +634,211 @@ def ritual_miss(s):
     s.draw_centered("listen again...", 56)
 
 
+# --- Free-brewing & system screens (identify / stir / reveal / settings) ----
+
+SERIF_LADDER = ["ncenB14", "ncenB12", "ncenB10"]
+
+
+def draw_fitted(s, text, budget, y1, y2a, y2b):
+    for f, font in enumerate(SERIF_LADDER):
+        s.set_font(font)
+        if s.get_str_width(text) <= budget:
+            s.draw_centered(text, y1)
+            return
+        l1, l2 = "", ""
+        for tok in text.split():
+            if not l2:
+                trial = (l1 + " " + tok).strip()
+                if s.get_str_width(trial) <= budget:
+                    l1 = trial
+                    continue
+            l2 = (l2 + " " + tok).strip()
+        ok = s.get_str_width(l1) <= budget and s.get_str_width(l2) <= budget
+        if ok or f == len(SERIF_LADDER) - 1:
+            s.draw_centered(l1, y2a)
+            s.draw_centered(l2, y2b)
+            return
+
+
+def corner_sparkles4(s, x1, y1, x2, y2, r):
+    for x, y in ((x1, y1), (x2, y1), (x1, y2), (x2, y2)):
+        sparkle(s, x, y, r)
+
+
+def identify_one(s, now, name):
+    corner_sparkles(s, now)
+    s.set_font("5x8")
+    s.draw_centered("First ingredient", 13)
+    draw_fitted(s, name, 110, 42, 36, 52)
+    sr = 2 if (now // 220) & 1 else 1
+    sparkle(s, 7, 40, sr); sparkle(s, 121, 40, sr)
+    s.set_font("5x8")
+    s.draw_centered("turn to stir", 62)
+
+
+def identify_multi(s, now, names):
+    corner_sparkles(s, now)
+    count = len(names)
+    label_font = "4x6" if count == 3 else "5x8"
+    name_font = "helvB08" if count == 3 else "ncenB10"
+    y = 16 if count == 2 else 9
+    name_dy = 11 if count == 2 else 8
+    block_h = 24 if count == 2 else 17
+    ords = ["First ingredient", "Second ingredient", "Third ingredient"]
+    for i, nm in enumerate(names):
+        s.set_font(label_font)
+        s.draw_centered(ords[i], y)
+        s.set_font(name_font)
+        w = s.get_str_width(nm)
+        x = (128 - w) // 2
+        ny = y + name_dy
+        if count == 2:
+            diamond(s, x - 7, ny - 3); diamond(s, x + w + 5, ny - 3)
+        s.draw_str(x, ny, nm)
+        y += block_h
+    s.set_font("5x8")
+    s.draw_centered("turn to stir", 62)
+
+
+def stirring(s, now, progress, swirl, msg):
+    s.set_font("helvR08")
+    s.draw_centered("- brewing -", 8)
+    cx, cy, rout = 64, 23, 16
+    for i in range(16):
+        a = i * (2.0 * math.pi / 16)
+        s.draw_pixel(cx + lroundf(rout * math.cos(a)), cy + lroundf(rout * math.sin(a)))
+    reach = 9.0 + progress * 6.0
+    for arm in range(2):
+        base = swirl + arm * math.pi
+        t = 0.0
+        while t < 3.0:
+            r = 3.0 + (t / 3.0) * reach
+            a = base + t * 1.7
+            s.draw_pixel(cx + lroundf(r * math.cos(a)), cy + lroundf(r * math.sin(a)))
+            t += 0.25
+    for k in range(4):
+        a = swirl - k * 0.34
+        x = cx + lroundf(rout * math.cos(a))
+        yy = cy + lroundf(rout * math.sin(a))
+        if k == 0:
+            s.draw_disc(x, yy, 2 + lroundf(progress * 2.0))
+        elif k < 2:
+            s.draw_disc(x, yy, 1)
+        else:
+            s.draw_pixel(x, yy)
+    power_bar(s, progress)
+    s.set_font("5x8")
+    s.draw_centered(msg, 62)
+
+
+def stir_ready(s, now):
+    fancy_frame(s)
+    sr = 2 if (now // 200) & 1 else 1
+    corner_sparkles4(s, 15, 14, 113, 50, sr)
+    s.set_font("helvR08")
+    s.draw_centered("potion ready", 14)
+    s.set_font("ncenB12")
+    s.draw_centered("Press to", 36)
+    s.draw_centered("create", 52)
+    sparkle(s, 28, 45, sr); sparkle(s, 100, 45, sr)
+
+
+def reveal_anim(s, el, style):
+    fancy_frame(s)
+    if style == 1:      # brewing surge: dithered liquid rises
+        p = min(el / 1300.0 * 1.2, 1.0)
+        base = 63 - lroundf(p * 63.0)
+        for x in range(2, 126):
+            surf = max(0, base + lroundf(2.5 * math.sin(x * 0.22 + el * 0.010)))
+            for y in range(surf, 64):
+                if ((x + y) & 1) == 0:
+                    s.draw_pixel(x, y)
+    elif style == 2:    # magic pulse: emanating rings
+        for k in range(4):
+            rad = ((el // 11) + k * 16) % 64
+            if rad > 3:
+                s.draw_circle(64, 33, rad); s.draw_circle(64, 33, rad - 1)
+    else:               # radar sweep
+        ang = el * 0.011
+        for t in range(6):
+            a = ang - t * 0.20
+            s.draw_line(64, 33, 64 + lroundf(58.0 * math.cos(a)),
+                        33 + lroundf(28.0 * math.sin(a)))
+        s.draw_disc(64, 33, 2)
+
+
+def reveal_name(s, now, name):
+    fancy_frame(s)
+    corner_sparkles4(s, 11, 11, 117, 53, 1 if (now // 250) & 1 else 0)
+    s.draw_hline(44, 15, 40)
+    diamond(s, 40, 15); diamond(s, 88, 15)
+    draw_fitted(s, name, 112, 39, 32, 47)
+
+
+def title_bar(s, title):
+    s.draw_box(0, 0, 128, 13)
+    s.set_draw_color(0)
+    s.set_font("helvB08")
+    s.draw_str(4, 10, title)
+    s.set_draw_color(1)
+
+
+def settings_menu(s, sel=1, editing=False):
+    title_bar(s, "Settings")
+    items = [("Realm", "Skyrim"), ("Volume", "3"), ("Bright", "3"),
+             ("Sleep", "10m"), ("Hardware Test", "")]
+    n_total, vis, row_w = 7, 5, 124
+    s.set_font("helvR08")
+    for row, (label, val) in enumerate(items):
+        y = 22 + row * 10
+        is_sel = (row == sel)
+        if is_sel and not editing:
+            s.draw_box(0, y - 8, row_w, 10); s.set_draw_color(0)
+        s.draw_str(4, y, label)
+        if val:
+            vw = s.get_str_width(val)
+            vx = row_w - vw - 4
+            if is_sel and editing:
+                s.draw_box(vx - 3, y - 8, vw + 6, 10)
+                s.set_draw_color(0); s.draw_str(vx, y, val); s.set_draw_color(1)
+            else:
+                s.draw_str(vx, y, val)
+        if is_sel and not editing:
+            s.set_draw_color(1)
+    ty, th = 15, 48
+    thumb_h = th * vis // n_total
+    s.draw_vline(127, ty, th)
+    s.draw_box(125, ty, 3, thumb_h)
+
+
+def diag(s, enc=12):
+    title_bar(s, "Hardware Test")
+    s.set_font("helvR08")
+    y = 24
+    for i, (pin, on) in enumerate([(1, False), (3, True), (4, False)]):
+        s.draw_str(4, y, f"Reed {i + 1}  G{pin}")
+        if on:
+            s.draw_box(96, y - 8, 9, 9)
+        else:
+            s.draw_frame(96, y - 8, 9, 9)
+        y += 10
+    s.draw_str(4, y, f"Btn up   enc {enc}")
+    s.set_font("5x8")
+    s.draw_centered("hold knob to exit", 63)
+
+
+def splash_final(s, now):
+    fancy_frame(s)
+    s.set_font("ncenR08")
+    s.draw_centered("Welcome to the", 13)
+    s.set_font("ncenB14")
+    s.draw_centered("Alchemist's", 38)
+    s.draw_centered("Study", 57)
+    twinkles(s, now)
+
+
 def skill_select(s, idx=1):
+
     s.draw_hline(44, 12, 40)
     diamond(s, 40, 12); diamond(s, 88, 12)
     s.set_font("helvR08")
@@ -731,6 +935,19 @@ def build():
     shot(lambda s: ritual_good(s, now, done=True))
     shot(lambda s: story_pause(s, 0))
     shot(lambda s: skill_select(s, 1))
+    # Free brewing & system screens.
+    shot(lambda s: identify_one(s, now, "Blue Mountain Flower"))
+    shot(lambda s: identify_multi(s, now, ["Blue Mountain Flower", "Deathbell"]))
+    shot(lambda s: identify_multi(s, now, ["Blue Mountain Flower", "Deathbell", "Nightshade"]))
+    shot(lambda s: stirring(s, now, 0.55, 2.1, "the magic stirs"))
+    shot(lambda s: stir_ready(s, now))
+    shot(lambda s: reveal_anim(s, 700, 0))
+    shot(lambda s: reveal_anim(s, 900, 1))
+    shot(lambda s: reveal_name(s, now, "Philter of the Phantom"))
+    shot(lambda s: settings_menu(s, 1))
+    shot(lambda s: settings_menu(s, 1, editing=True))
+    shot(lambda s: diag(s))
+    shot(lambda s: splash_final(s, now))
     return shots
 
 

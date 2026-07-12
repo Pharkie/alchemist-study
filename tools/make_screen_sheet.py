@@ -88,6 +88,22 @@ SECTIONS = [
     ("Story — the opening question", [
         (49, "Skill chosen at every quest start"),
     ]),
+    ("Free brewing — identify to reveal", [
+        (50, "Identify — one ingredient"),
+        (51, "Identify — two stack"),
+        (52, "Identify — all three"),
+        (53, "Classic stir — vortex + bar"),
+        (54, "Bar full — press to create"),
+        (55, "Reveal — radar sweep"),
+        (56, "Reveal — rising liquid"),
+        (57, "Reveal — the potion named"),
+    ]),
+    ("System", [
+        (58, "Settings — Volume selected"),
+        (59, "Settings — editing a value"),
+        (60, "Hardware Test (in-firmware)"),
+        (61, "Boot splash — final frame"),
+    ]),
 ]
 
 
