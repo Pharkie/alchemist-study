@@ -164,8 +164,11 @@ story's 1 → 2 → 3 bottle escalation walks the player up all three.
   seated backs out** to the fight, no turn consumed). Act mechanics apply
   inside story brews too (two bottles = align, three = ritual). Story forces
   `g_universe` to Skyrim while active and restores it on exit (NVS
-  untouched). Long-press anywhere (including mid-brew and mid-ritual)
-  abandons to the carousel.
+  untouched). **Exiting a quest:** 15 s without input raises the pause
+  spinner ("Quest on" / "Quit") over any story screen — the one deliberate
+  quit path (a bare long-press proved undiscoverable and was dropped).
+  Mid-brew/mid-ritual a long-press still abandons, as a hidden hatch — the
+  pause menu can't reach the shared brew screens.
 - **IDENTIFY** — ≥1 bottle seated. **Features** the ingredient name(s) in an
   elegant serif with sparkles (a single ingredient large, two/three stacked);
   each name carries a small **ordinal caption** above it ("First/Second/Third
@@ -221,11 +224,13 @@ story's 1 → 2 → 3 bottle escalation walks the player up all three.
   - In RITUAL = a "press" answer to the incantation (or skips the intro card).
   - On IDLE = activate the carousel panel in view (Story Mode / Settings;
     the Place panel just gives the "not yet" buzz).
-  - In STORY = advance a card / select the spinner option.
+  - In STORY = advance a card / select the spinner option (incl. the idle
+    pause menu's "Quest on" / "Quit").
   - In SETTINGS = activate the highlighted item.
 - **Long press (≥600 ms)** = leave a menu (SETTINGS → idle, Hardware Test →
-  Settings) or **abandon the ritual** (resync to the base; mid-story it
-  abandons to the carousel). It no longer toggles the realm.
+  Settings) or **abandon the ritual** (resync to the base). In STORY it does
+  nothing — quitting is the idle pause menu's job. It no longer toggles the
+  realm.
 
 ### Settings menu (`ST_SETTINGS`) — a reusable mini-menu
 

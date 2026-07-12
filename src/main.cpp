@@ -269,6 +269,12 @@ static int      s_gold = 0;           // the purse — inventory system v0 (gold
 static int      s_biteN = 0;          // enemy bites landed (CRIT_ON_BITE'th = the crit)
 static char     s_bmsg[64] = "";      // battle message line
 static Universe s_prevUniverse = UNI_SKYRIM;   // restored when the story ends
+// Idle pause menu — THE way out of a quest (a bare long-press proved
+// undiscoverable): STORY_PAUSE_MS without any input raises a "Quest on /
+// Quit" spinner over the story; either answer is safe.
+static bool     s_storyPause = false;
+static int      s_pauseIdx   = 0;     // 0 = Quest on, 1 = Quit
+static constexpr uint32_t STORY_PAUSE_MS = 15000;
 static constexpr int PLAYER_MAX_HP   = 30;
 static constexpr int STORY_START_GOLD = 7;
 static constexpr int CRIT_ON_BITE  = 2;   // this bite is the crit (unless already
@@ -805,6 +811,7 @@ static void battleReset() {
 static void storyEnd() {
   g_universe = s_prevUniverse;
   s_storyBrew = false;
+  s_storyPause = false;
   enterCombo(s_sensedCombo);
   if (g_state == ST_IDLE) { s_homePanel = HP_QUEST; s_homeX = (float)(PANEL_W * HP_QUEST); }
 }
@@ -839,6 +846,7 @@ static void storyBegin() {
   s_php = PLAYER_MAX_HP;
   s_phpShown = (float)s_php;
   s_storyBrew = false;
+  s_storyPause = false;
   s_story = kStorySkyrim;
   enterState(ST_STORY);
   storyGoto(0);
@@ -1065,6 +1073,10 @@ static void updateRitual(uint32_t now, int32_t d) {
 // Turning only matters when a choice spinner is on screen: each detent
 // cycles the option shown on the bottom line (either direction works).
 static void storyNav(int32_t d) {
+  if (s_storyPause) {                      // pause spinner: two options, wraps
+    if (navSteps(d)) s_pauseIdx ^= 1;
+    return;
+  }
   const StoryNode& n = s_story[s_node];
   bool choosing = (n.kind == N_CHOICE) ||
                   (n.kind == N_BATTLE && s_bp == BP_CHOOSE);
@@ -1074,6 +1086,11 @@ static void storyNav(int32_t d) {
 }
 
 static void storyPress() {
+  if (s_storyPause) {
+    if (s_pauseIdx == 0) s_storyPause = false;   // Quest on: exactly where you were
+    else storyEnd();                             // Quit: back to the carousel
+    return;
+  }
   const StoryNode& n = s_story[s_node];
   switch (n.kind) {
     case N_CARD:
@@ -1125,6 +1142,14 @@ static void easeHP(float* shown, int actual, uint32_t dt) {
 // bar too). Tunes loop until pressed; scenes run out their clock; battle
 // message phases hold, then hand the turn over (win -> nextA, KO -> nextB).
 static void updateStory(uint32_t now, uint32_t dt) {
+  // Idle raises the pause spinner; while it's up the story sim freezes (a
+  // waiting battle beat resumes instantly on "Quest on" — harmless, since
+  // pause can only trigger on screens already waiting for input).
+  if (!s_storyPause && (uint32_t)(now - g_lastActivityMs) >= STORY_PAUSE_MS) {
+    s_storyPause = true;
+    s_pauseIdx = 0;
+  }
+  if (s_storyPause) return;
   easeHP(&s_phpShown, s_php, dt);
   easeHP(&s_ehpShown, s_ehp, dt);
   const StoryNode& n = s_story[s_node];
@@ -1446,7 +1471,6 @@ static void onLongPress(uint32_t now) {
       } else settingsExit();                     // ...otherwise leave the menu
       break;
     case ST_DIAG:     settingsEnter(); break;     // diagnostic back to the menu
-    case ST_STORY:    storyEnd();      break;     // abandon the quest
 #ifdef BENCH_SIM_COMBO
     case ST_IDLE:                                 // Place panel: fake all three
       if (s_homePanel == HP_PLACE) {
@@ -2846,7 +2870,20 @@ static void renderStorySpeak(const StoryNode& n, uint32_t now) {
   }
 }
 
+// The idle pause menu: raised after STORY_PAUSE_MS without input — the one
+// and only quit path (long-press abandoned as undiscoverable).
+static void renderStoryPause(uint32_t now) {
+  (void)now;
+  oled.clearBuffer();
+  drawFancyFrame();
+  oled.setFont(u8g2_font_helvR08_tr);
+  drawCenteredF("The quest waits...", 24);
+  drawChoiceLine(s_pauseIdx == 0 ? "Quest on" : "Quit");
+  oled.sendBuffer();
+}
+
 static void renderStory(uint32_t now) {
+  if (s_storyPause) { renderStoryPause(now); return; }
   oled.clearBuffer();
   const StoryNode& n = s_story[s_node];
   switch (n.kind) {
