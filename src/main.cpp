@@ -575,7 +575,9 @@ static const Note MEL_SYM_CW[]    = { {880, 240} };               // turn right 
 static const Note MEL_SYM_CCW[]   = { {392, 240} };               // turn left  = low
 static const Note MEL_SYM_PRESS[] = { {587, 240} };               // press      = mid
 static const Note MEL_RITBEGIN[]  = { {330, 140}, {392, 140}, {494, 220} }; // mystic rise
-static const Note MEL_RITGOOD[]   = { {659, 90}, {880, 150} };    // verse complete
+// NOTE: no verse-complete jingle. The symbol notes ARE the puzzle (the final
+// verse is answered by ear alone), so nothing melodic may share the channel —
+// the RI_GOOD screen confirms visually and the last answer's echo rings free.
 // Dice rattle: descending "thuds" roughly aligned with the tumble's bounces
 // (impacts near t = 0, 1/3, 2/3, 1 of QUEST_TUMBLE_MS).
 static const Note MEL_DICE_RATTLE[] = {
@@ -1026,10 +1028,8 @@ static void updateRitual(uint32_t now, int32_t d) {
       if (now - g_stateMs >= RIT_INPUT_TIMEOUT_MS) ritShowBegin(now);  // lost? hear it again
       break;
     case RI_GOOD:
-      if (!s_ritChimed && el >= RIT_ECHO_MS) {   // echo first, then the jingle
-        s_ritChimed = true;
-        startMelody(MEL_RITGOOD, ARRAY_COUNT(MEL_RITGOOD), now);
-      }
+      // Deliberately silent (beyond the last answer's echo): melody would
+      // muddy the symbol notes the player is memorising by ear.
       if (el >= RIT_GOOD_MS) {
         if (s_ritDone) {                         // incantation complete
           if (s_storyBrew) storyBrewResolve();   // the story judges the brew
