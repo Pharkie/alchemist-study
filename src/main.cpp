@@ -143,8 +143,8 @@ static constexpr int32_t  ENC_STEP          = 4;     // encoder counts per menu/
 static constexpr float    ALIGN_KNOB_STEP   = 0.05f; // phase radians per encoder count
 static constexpr uint32_t ALIGN_RETARGET_MS = 700;   // how often the drift picks a new heading
 static constexpr float    ALIGN_FLIP_P      = 0.25f; // chance a new heading reverses direction
-static constexpr float    ALIGN_RAMP        = 1.0f;  // extra drift speed gained by a full bar (x2 at top)
-static constexpr float    ALIGN_TOL_SHRINK  = 0.3f;  // fraction of tolerance lost by a full bar
+static constexpr float    ALIGN_RAMP        = 0.5f;  // extra drift speed gained by a full bar (x1.5 at top)
+static constexpr float    ALIGN_TOL_SHRINK  = 0.15f; // fraction of tolerance lost by a full bar
 
 // Act 3 — the Grand Brew ritual (three-ingredient master potion).
 static constexpr uint32_t RIT_INTRO_MS         = 1800;  // "The Grand Brew" card
@@ -684,11 +684,21 @@ static void updateAudio(uint32_t now) {
 }
 
 // ---- Input helpers -----------------------------------------------------
+#ifdef BENCH_SIM_COMBO
+// Dev-build bench shortcut: simulated bottle bits, OR'd into the raw reed
+// read so latching/debounce/resync behave exactly as with real magnets.
+// Cycled by pressing the Place panel; dropped by a long-press mid-brew.
+static uint8_t s_simCombo = 0;
+#endif
+
 static uint8_t readRawCombo() {
   uint8_t c = 0;
   if (digitalRead(PIN_REED_SLOT1) == LOW) c |= 0x01;
   if (digitalRead(PIN_REED_SLOT2) == LOW) c |= 0x02;
   if (digitalRead(PIN_REED_SLOT3) == LOW) c |= 0x04;
+#ifdef BENCH_SIM_COMBO
+  c |= s_simCombo;
+#endif
   return c;
 }
 
@@ -1176,7 +1186,7 @@ static constexpr int      kStirN        = 3;
 static const float        kAlignTol[]   = { 0.80f, 0.60f, 0.45f };  // radians either side, before the shrink
 static const float        kAlignDrift[] = { 0.90f, 1.40f, 2.00f };  // max drift speed (rad/s), before the ramp
 static const float        kAlignFill[]  = { 0.30f, 0.22f, 0.16f };  // bar added per aligned sec
-static const float        kAlignDrain[] = { 0.20f, 0.28f, 0.40f };  // bar drained per misaligned sec
+static const float        kAlignDrain[] = { 0.10f, 0.14f, 0.20f };  // bar drained per misaligned sec
 
 static void applyBrightness() {
   if (g_haveDisplay) oled.setContrast((uint8_t)map(g_brightness, 1, 5, 16, 255));
@@ -1227,12 +1237,31 @@ static void homePressNothing() {   // nothing to confirm until bottles arrive
   startMelody(MEL_NOTREADY, ARRAY_COUNT(MEL_NOTREADY), g_now);
 }
 
+#ifdef BENCH_SIM_COMBO
+// Bench shortcut: pressing the Place panel seats simulated bottles — two
+// (act 2's align game), then three (the ritual), then one (classic stir).
+// Long-press mid-brew drops them again (see onLongPress).
+static void homePressSimCombo() {
+  static const uint8_t cycle[] = { 0x03, 0x07, 0x01 };
+  static uint8_t i = 0;
+  s_simCombo = cycle[i];
+  i = (i + 1) % (uint8_t)ARRAY_COUNT(cycle);
+  startMelody(MEL_TOGGLE, ARRAY_COUNT(MEL_TOGGLE), g_now);
+  Serial.printf("[sim] combo %u%u%u seated\n",
+                (s_simCombo >> 2) & 1, (s_simCombo >> 1) & 1, s_simCombo & 1);
+}
+#endif
+
 struct HomePanelDef {
   void (*render)(int dx, uint32_t now);   // draw the panel shifted by dx
   void (*press)();                        // short press while it's in view
 };
 static const HomePanelDef kHomePanels[] = {
+#ifdef BENCH_SIM_COMBO
+  { renderHomePlace,    homePressSimCombo },  // HP_PLACE (dev: fake bottles)
+#else
   { renderHomePlace,    homePressNothing },  // HP_PLACE
+#endif
   { renderHomeQuest,    storyBegin       },  // HP_QUEST
   { renderHomeSettings, settingsEnter    },  // HP_SETTINGS
 };
@@ -1391,10 +1420,18 @@ static void onLongPress(uint32_t now) {
     case ST_IDENTIFY:
     case ST_STIRRING:
       if (s_storyBrew) storyEnd();                // abandon mid-brew too
+#ifdef BENCH_SIM_COMBO
+      else s_simCombo = 0;                        // drop simulated bottles -> idle
+#endif
       break;
     case ST_RITUAL:
       if (s_storyBrew) storyEnd();                // abandon mid-brew too
-      else enterCombo(s_sensedCombo);             // abandon the ritual, resync
+      else {
+#ifdef BENCH_SIM_COMBO
+        s_simCombo = 0;                           // drop simulated bottles too
+#endif
+        enterCombo(s_sensedCombo);                // abandon the ritual, resync
+      }
       break;
     default:          break;
   }
