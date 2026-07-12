@@ -118,7 +118,14 @@ story's 1 → 2 → 3 bottle escalation walks the player up all three.
   acts and universes are pure data (`kStorySkyrim`). `N_BREW` runs the brew
   machinery outside battle (wrong potion named, retried at leisure, no
   backing out). **Recipe rule:** every act's target recipe is SPOKEN in
-  dialogue before the brew and repeated as the brew-screen hint. `N_SPEAK` renders a character: a procedural **emblem**
+  dialogue before the brew and repeated as the brew-screen hint.
+  **Text-fit gate:** authored story text (card/speak bodies, titles, brew
+  hints, battle intros) is checked against each renderer's real wrap
+  budget by `tools/check_story_text.py`, which parses the tables out of
+  main.cpp and runs as a PlatformIO pre-script — **overflowing text fails
+  the build**, naming the node and the words that would be dropped
+  (drawWrapped truncates silently on-device). If a renderer's budget
+  changes, update the constants at the top of that script. `N_SPEAK` renders a character: a procedural **emblem**
   on the left (the node's `art` fn — `drawJarl` is a bobbing, glinting crown;
   emblems beat literal faces at 30 px), speech bubble with tail on the right,
   speaker name beneath.
