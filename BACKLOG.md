@@ -4,8 +4,10 @@ Phased plan. Check items off as completed. See `CLAUDE.md` for the full spec,
 pin map, and potion tables.
 
 > **Status:** Phases 0–6 shipped as **v0.1** (the bench firmware). Items whose
-> behaviour later evolved carry a *(superseded: …)* note. Next up: Stage 2
-> (connectivity), below.
+> behaviour later evolved carry a *(superseded: …)* note. GPIO numbers quoted
+> in the phase notes are the original bench wiring; the final pin map lives in
+> `src/pins.h` (and the CLAUDE.md table). Next up: Stage 2 (connectivity),
+> below.
 
 ## Phase 0 — Project setup
 
@@ -58,7 +60,7 @@ Two independent moves here — keep them separate:
       the encoder; intensity/decay tracks stir progress.
 - [x] REVEAL: potion name, word-wrap to two lines if wider than 128px.
 
-## Phase 4 — Audio (buzzer, GPIO1)
+## Phase 4 — Audio (buzzer, GPIO7)
 
 - [x] Stir brewing trill: pitch rises with stir progress (~320 → ~1100 Hz),
       decays back down when the knob is still.
@@ -82,6 +84,24 @@ Two independent moves here — keep them separate:
 - [x] On-hardware pass: all 7 combos × both universes, reveal wrapping,
       toggle persists across reboot.
 - [x] Comment pass: pin choices + core-3.x dependency rationale in `main.cpp`.
+
+---
+
+## Stage 1.5 — Brewing acts (mini-games)
+
+The brewing mechanic now scales with the **act** = bottles seated
+(design + shelved ideas in `docs/MINIGAMES.md`, tuning in `docs/TUNING.md`):
+
+- [x] Act 1 (one bottle): classic capped-add stir (unchanged).
+- [x] Act 2 (two bottles): **"align the essences"** — steer your wave into
+      phase with a drifting ghost wave; the bar fills only while aligned, and
+      the trill doubles as the hot/cold aid.
+- [x] Act 3 (all three = master potion): the **Grand Brew ritual** — a
+      Simon-style incantation of turns/presses (3 verses, lengths 2/3/4)
+      after the stir; finishing goes straight to the reveal.
+- [ ] Future candidates (see `docs/MINIGAMES.md`): attunement dial
+      ("perfect brew" finisher), essence catcher easter egg, alembic balance,
+      wheel of fate, per-realm ritual flavour.
 
 ---
 
