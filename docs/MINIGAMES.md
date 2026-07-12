@@ -12,7 +12,7 @@ earned.
 |-----|---------|----------|---------|
 | 1 | one | **Classic stir** — spin to fill the power bar against constant decay (capped add rate, see [TUNING.md](TUNING.md)). | `updateStir()` act 1/3 path |
 | 2 | two | **Align the essences** — your wave (solid) must be brought into phase with a drifting ghost wave; the bar fills only while aligned, drains while not. The drift has a persistent heading (occasionally reversing), speeds up and the tolerance tightens as the bar fills — a parked knob loses. The trill is the hot/cold aid: closer = higher and steadier, far off = low with a wide warble. | `updateStir()` act 2 path, `kAlign*`/`ALIGN_*` tunables |
-| 3 | three | **The Grand Brew** — the classic stir fills the bar, then the brew speaks a growing incantation of glyphs (turn right / turn left / press, each with its own note) and you repeat it back over four verses (Simon-style, lengths 3/4/5/6). The final verse is spoken blind — notes only, no glyphs (muted players get glyphs back). A miss just replays the verse; finishing goes straight to the reveal. | `ST_RITUAL`, `updateRitual()`, `RIT_*` tunables |
+| 3 | three | **The Grand Brew** — the classic stir fills the bar, then the brew speaks a growing incantation of glyphs (turn right / turn left / press, each with its own note) and you repeat it back Simon-style. The skill sworn at quest start shapes it: Apprentice 3 verses (3/4/5, all shown), Graduate 4 (3/4/5/6, final verse blind — notes only), Professor 4 (4/5/6/7, final TWO blind); glyph pace never changes. Muted players always get glyphs. A miss just replays the verse; finishing goes straight to the reveal. | `ST_RITUAL`, `updateRitual()`, `RIT_*` tunables |
 
 Design notes:
 

@@ -67,15 +67,21 @@ steadier; far off = lower with a wide warble.
 ## Act 3 — the Grand Brew ritual (all three bottles)
 
 After the stir bar fills, a Simon-style incantation of turns/presses plays and
-must be repeated back. All timing/shape knobs are `RIT_*` constants:
+must be repeated back. The skill level (chosen at each quest start) shapes the
+INCANTATION — never the glyph pace, which is fixed: the bench verdict was that
+faster reading is a UX hazard, not a welcome difficulty axis.
 
 | Constant | Default | Effect |
 |---|---|---|
-| `RIT_SEQ_LEN` / `RIT_ROUNDS` | `6` / `4` | incantation length; verses are prefixes (lengths 3-6). The final verse is spoken BLIND (notes only; glyphs return when muted). |
-| `RIT_GLYPH_MS` | `650` | per-glyph time while the incantation plays. |
+| `kRitRounds[]` | `3 / 4 / 4` | verses per skill (Apprentice/Graduate/Professor). |
+| `kRitBaseLen[]` | `3 / 3 / 4` | first verse's length; verse i adds i symbols (App 3/4/5, Grad 3/4/5/6, Prof 4/5/6/7). |
+| `kRitBlind[]` | `0 / 1 / 2` | how many FINAL verses play blind (notes only; glyphs return at Volume 0). |
+| `RIT_SEQ_LEN` | `7` | longest verse (Professor's final) — the sequence buffer size. |
+| `RIT_GLYPH_MS` | `750` | per-glyph time, FIXED across skills. |
 | `RIT_TURN_COUNTS` | `4` | encoder counts (~1 detent) that register a turn answer (bench-tuned: 2 detents felt unresponsive). |
 | `RIT_INPUT_TIMEOUT_MS` | `12000` | stalled answer → the verse replays (no fail). |
-| `RIT_INTRO_MS` / `RIT_GOOD_MS` / `RIT_MISS_MS` | `1800/900/1200` | card + interlude durations. |
+| `RIT_ECHO_MS` | `280` | the last answer's note rings this long before an interlude may take the buzzer. |
+| `RIT_INTRO_MS` / `RIT_GOOD_MS` / `RIT_MISS_MS` | `1800 / 900 / 1200` | card + interlude durations. |
 
 ## Audio (needs a passive buzzer)
 

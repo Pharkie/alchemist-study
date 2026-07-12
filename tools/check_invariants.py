@@ -18,6 +18,8 @@ TUNING.md / code comments) and therefore rotted silently:
   strings  every multi-word display string the sim twin draws still
            exists in main.cpp — stale transliterations get flagged the
            moment the firmware copy changes
+  tuning   every `CONSTANT` | `value` table row in docs/TUNING.md matches
+           the value in main.cpp (quoted numbers rot on every retune)
   docs     menu labels, potion and ingredient names all appear in
            CLAUDE.md (the reference tables readers actually consult)
 
@@ -260,6 +262,53 @@ def check_twin_strings(errors, root, main_src):
                           f"— screens_preview.py has drifted from the firmware")
 
 
+# ---- TUNING.md quoted values vs code ----------------------------------------
+
+def scalar_const(src, name):
+    m = re.search(r"\b" + re.escape(name) + r"\s*=\s*(-?[0-9.]+)", src)
+    return float(m.group(1)) if m else None
+
+
+def check_tuning(errors, root, main_src):
+    """Every `CONSTANT` | `value` table row in TUNING.md must match main.cpp —
+    the doc quotes exact numbers, and quoted numbers rot (RIT_GLYPH_MS did)."""
+    doc = open(os.path.join(root, "docs", "TUNING.md")).read()
+    for line in doc.splitlines():
+        if not line.startswith("| `"):
+            continue
+        cells = line.split("|")
+        if len(cells) < 4:
+            continue
+        names = re.findall(r"`(\w+)(\[\])?`", cells[1])
+        doc_vals = [float(x) for x in re.findall(r"-?\d+\.?\d*", cells[2])]
+        if not names or not doc_vals:
+            continue
+        code_vals = []
+        for name, brackets in names:
+            if brackets:
+                vals = float_array(main_src, name)
+                if vals is None:
+                    errors.append(f"tuning: TUNING.md documents `{name}[]` but it isn't "
+                                  f"in main.cpp — renamed?")
+                    code_vals = None
+                    break
+                code_vals.extend(vals)
+            else:
+                v = scalar_const(main_src, name)
+                if v is None:
+                    errors.append(f"tuning: TUNING.md documents `{name}` but it isn't "
+                                  f"in main.cpp — renamed?")
+                    code_vals = None
+                    break
+                code_vals.append(v)
+        if code_vals is None:
+            continue
+        if len(code_vals) != len(doc_vals) or any(
+                abs(a - b) > 1e-6 * max(1.0, abs(b)) for a, b in zip(doc_vals, code_vals)):
+            errors.append(f"tuning: TUNING.md row {'/'.join(n for n, _ in names)} says "
+                          f"{doc_vals}, main.cpp says {code_vals}")
+
+
 # ---- docs reference tables -------------------------------------------------
 
 def check_docs(errors, root, main_src):
@@ -294,6 +343,7 @@ def run(root):
     check_pins(errors, root)
     check_twins(errors, root, main_src)
     check_twin_strings(errors, root, main_src)
+    check_tuning(errors, root, main_src)
     check_docs(errors, root, main_src)
     return errors
 
@@ -310,7 +360,7 @@ def main(root=None):
               f"tools/check_invariants.py)", file=sys.stderr)
         raise SystemExit(1)
     print("[check_invariants] OK — graph, battle maths, stir tables, pin docs, "
-          "d20 twins, twin strings, doc tables all consistent")
+          "d20 twins, twin strings, TUNING values, doc tables all consistent")
 
 
 # PlatformIO extra_scripts pre-action. The try guards ONLY the Import probe —
