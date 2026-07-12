@@ -167,7 +167,7 @@ static const int kRitBaseLen[] = { 3, 3, 4 };   //   Hard 4/5/6/7
 static const int kRitBlind[]   = { 0, 1, 2 };   // none / final / final two
 
 // Firmware version — keep in step with the git tag / GitHub release.
-#define FW_VERSION "v0.1"
+#define FW_VERSION "v0.2"
 
 // ---- Hardware objects --------------------------------------------------
 // Full-buffer (_F_) SSD1306 over hardware I2C.
