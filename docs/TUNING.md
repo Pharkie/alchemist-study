@@ -70,7 +70,7 @@ must be repeated back. All timing/shape knobs are `RIT_*` constants:
 
 | Constant | Default | Effect |
 |---|---|---|
-| `RIT_SEQ_LEN` / `RIT_ROUNDS` | `4` / `3` | incantation length; verses are prefixes (lengths 2, 3, 4). |
+| `RIT_SEQ_LEN` / `RIT_ROUNDS` | `6` / `4` | incantation length; verses are prefixes (lengths 3-6). The final verse is spoken BLIND (notes only; glyphs return when muted). |
 | `RIT_GLYPH_MS` | `650` | per-glyph time while the incantation plays. |
 | `RIT_TURN_COUNTS` | `4` | encoder counts (~1 detent) that register a turn answer (bench-tuned: 2 detents felt unresponsive). |
 | `RIT_INPUT_TIMEOUT_MS` | `12000` | stalled answer → the verse replays (no fail). |

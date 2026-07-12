@@ -155,8 +155,8 @@ static constexpr uint32_t RIT_ECHO_MS          = 280;   // let the last answer's
                                                         // before the interlude jingle takes the buzzer
 static constexpr uint32_t RIT_INPUT_TIMEOUT_MS = 12000; // stalled answer -> replay the verse
 static constexpr int32_t  RIT_TURN_COUNTS      = 4;     // counts (~1 detent) per turn answer
-static constexpr int      RIT_SEQ_LEN          = 4;     // full incantation length
-static constexpr int      RIT_ROUNDS           = 3;     // verse lengths 2, 3, 4 (prefixes)
+static constexpr int      RIT_SEQ_LEN          = 6;     // full incantation length
+static constexpr int      RIT_ROUNDS           = 4;     // verse lengths 3..6 (prefixes)
 
 // Firmware version — keep in step with the git tag / GitHub release.
 #define FW_VERSION "v0.1"
@@ -942,7 +942,7 @@ static void startReveal(uint32_t now) {
 // verse — the master potion should feel earned, not punishing. Inside a story
 // brew the finished incantation hands to storyBrewResolve, not the reveal.
 
-static int ritRoundLen() { return s_ritRound + 2; }   // verse lengths 2, 3, 4
+static int ritRoundLen() { return s_ritRound + 3; }   // verse lengths 3, 4, 5, 6
 
 static void playSymTone(uint8_t sym, uint32_t now) {
   switch (sym) {
@@ -2158,13 +2158,24 @@ static void renderRitual(uint32_t now) {
       break;
 
     case RI_SHOW: {
-      snprintf(hdr, sizeof(hdr), "verse %d of %d - watch", s_ritRound + 1, RIT_ROUNDS);
+      // The final verse is spoken BLIND — notes only, no glyphs — so the
+      // per-symbol voices become load-bearing. Muted players get glyphs
+      // back, or the verse would be unpassable.
+      bool blind = (s_ritRound == RIT_ROUNDS - 1) && !g_mute;
+      snprintf(hdr, sizeof(hdr), "verse %d of %d - %s",
+               s_ritRound + 1, RIT_ROUNDS, blind ? "listen" : "watch");
       oled.setFont(u8g2_font_5x8_tr);
       drawCenteredF(hdr, 8);
       int idx = (int)(el / RIT_GLYPH_MS);
       uint32_t glyphEl = el - (uint32_t)idx * RIT_GLYPH_MS;
       // A short blank tail on each slot separates repeated symbols.
-      if (idx < ritRoundLen() && glyphEl < RIT_GLYPH_MS - 160) {
+      if (blind) {
+        oled.setFont(u8g2_font_helvR08_tr);
+        drawCenteredF("the brew whispers...", 34);
+        // A pulse marks each spoken slot so the rhythm still reads on screen.
+        if (idx < ritRoundLen() && glyphEl < RIT_GLYPH_MS - 160)
+          drawSparkle(64, 48, 1 + (int)((glyphEl / 120) % 2));
+      } else if (idx < ritRoundLen() && glyphEl < RIT_GLYPH_MS - 160) {
         drawRitGlyph(s_ritSeq[idx], 64, 32);
         oled.setFont(u8g2_font_5x8_tr);
         drawCenteredF(ritSymWord(s_ritSeq[idx]), 60);

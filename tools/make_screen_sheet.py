@@ -76,9 +76,11 @@ SECTIONS = [
         (40, "Ritual — 'turn right' glyph"),
         (41, "Ritual — 'turn left' glyph"),
         (42, "Ritual — 'press' glyph"),
-        (43, "Ritual — repeat (1 of 3 answered)"),
+        (43, "Ritual — repeat (1 of 4 answered)"),
         (44, "Ritual — verse complete"),
         (45, "Ritual — a miss replays the verse"),
+        (46, "Ritual — final verse, spoken blind"),
+        (47, "Ritual — the incantation holds"),
     ]),
 ]
 

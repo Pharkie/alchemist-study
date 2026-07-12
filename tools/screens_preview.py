@@ -589,9 +589,14 @@ def ritual_intro(s):
     s.draw_centered("watch the incantation", 60)
 
 
-def ritual_show(s, verse, rounds, sym):
+def ritual_show(s, verse, rounds, sym, blind=False, glyph_el=200):
     s.set_font("5x8")
-    s.draw_centered("verse %d of %d - watch" % (verse, rounds), 8)
+    s.draw_centered("verse %d of %d - %s" % (verse, rounds, "listen" if blind else "watch"), 8)
+    if blind:
+        s.set_font("helvR08")
+        s.draw_centered("the brew whispers...", 34)
+        sparkle(s, 64, 48, 1 + (glyph_el // 120) % 2)
+        return
     rit_glyph(s, sym, 64, 32)
     s.set_font("5x8")
     s.draw_centered(RIT_WORDS[sym], 60)
@@ -614,12 +619,12 @@ def ritual_input(s, now, verse, rounds, length, answered):
     s.draw_centered("turn or press to answer", 62)
 
 
-def ritual_good(s, now):
+def ritual_good(s, now, done=False):
     corner_sparkles(s, now)
     s.set_font("ncenB12")
-    s.draw_centered("Well stirred!", 34)
+    s.draw_centered("It is done!" if done else "Well stirred!", 34)
     s.set_font("5x8")
-    s.draw_centered("the brew deepens...", 56)
+    s.draw_centered("the incantation holds..." if done else "the brew deepens...", 56)
 
 
 def ritual_miss(s):
@@ -700,12 +705,14 @@ def build():
     shot(lambda s: attune(s, now, 0.3, 2.2, False, 0.15, "seek the resonance"))
     shot(lambda s: attune(s, now, 1.9, 2.0, True, 0.65, "hold the resonance"))
     shot(lambda s: ritual_intro(s))
-    shot(lambda s: ritual_show(s, 1, 3, 0))
-    shot(lambda s: ritual_show(s, 1, 3, 1))
-    shot(lambda s: ritual_show(s, 2, 3, 2))
-    shot(lambda s: ritual_input(s, now, 2, 3, 3, 1))
+    shot(lambda s: ritual_show(s, 1, 4, 0))
+    shot(lambda s: ritual_show(s, 1, 4, 1))
+    shot(lambda s: ritual_show(s, 2, 4, 2))
+    shot(lambda s: ritual_input(s, now, 2, 4, 4, 1))
     shot(lambda s: ritual_good(s, now))
     shot(lambda s: ritual_miss(s))
+    shot(lambda s: ritual_show(s, 4, 4, 0, blind=True))
+    shot(lambda s: ritual_good(s, now, done=True))
     return shots
 
 
