@@ -33,3 +33,8 @@ __pycache__/
 *~
 *.bak
 *.tmp
+
+# Local design assets, kept out of the repo (3d_model is ~240MB — needs
+# Git LFS or a curated STL subset if it should ever be versioned)
+3d_model/
+circuit_board/
