@@ -136,9 +136,15 @@ static constexpr uint16_t PITCH_MAX_HZ      = 1100;
 static constexpr int32_t  ENC_STEP          = 4;     // encoder counts per menu/select step
 
 // Act 2 — "align the essences" (two-ingredient brews). The knob shifts your
-// wave's phase; the target wave drifts. See kAlign* (per stir level) below.
+// wave's phase; the target wave drifts with a PERSISTENT heading (mostly keeps
+// its direction, sometimes reverses) so it genuinely travels — a parked knob
+// loses. Speed ramps up and the tolerance band tightens as the bar fills.
+// See kAlign* (per stir level) below.
 static constexpr float    ALIGN_KNOB_STEP   = 0.05f; // phase radians per encoder count
-static constexpr uint32_t ALIGN_RETARGET_MS = 900;   // how often the drift picks a new heading
+static constexpr uint32_t ALIGN_RETARGET_MS = 700;   // how often the drift picks a new heading
+static constexpr float    ALIGN_FLIP_P      = 0.25f; // chance a new heading reverses direction
+static constexpr float    ALIGN_RAMP        = 1.0f;  // extra drift speed gained by a full bar (x2 at top)
+static constexpr float    ALIGN_TOL_SHRINK  = 0.4f;  // fraction of tolerance lost by a full bar
 
 // Act 3 — the Grand Brew ritual (three-ingredient master potion).
 static constexpr uint32_t RIT_INTRO_MS         = 1800;  // "The Grand Brew" card
@@ -146,7 +152,7 @@ static constexpr uint32_t RIT_GLYPH_MS         = 650;   // per glyph while the i
 static constexpr uint32_t RIT_GOOD_MS          = 900;   // "well stirred" between verses
 static constexpr uint32_t RIT_MISS_MS          = 1200;  // "it resists" before a replay
 static constexpr uint32_t RIT_INPUT_TIMEOUT_MS = 12000; // stalled answer -> replay the verse
-static constexpr int32_t  RIT_TURN_COUNTS      = 8;     // counts (~2 detents) per turn answer
+static constexpr int32_t  RIT_TURN_COUNTS      = 4;     // counts (~1 detent) per turn answer
 static constexpr int      RIT_SEQ_LEN          = 4;     // full incantation length
 static constexpr int      RIT_ROUNDS           = 3;     // verse lengths 2, 3, 4 (prefixes)
 
@@ -1162,10 +1168,12 @@ static constexpr int      kStirN        = 3;
 // Act 2 "align the essences", per stir level. The bar fills only while your
 // phase is inside the tolerance band around the drifting target, and drains
 // while it isn't — so aligned-time to fill is ~1/fill sec plus hunting time.
-static const float        kAlignTol[]   = { 0.45f, 0.35f, 0.25f };  // radians either side
-static const float        kAlignDrift[] = { 0.35f, 0.55f, 0.80f };  // max drift speed (rad/s)
-static const float        kAlignFill[]  = { 0.34f, 0.26f, 0.18f };  // bar added per aligned sec
-static const float        kAlignDrain[] = { 0.10f, 0.14f, 0.20f };  // bar drained per misaligned sec
+// Drift speed is multiplied by up to (1 + ALIGN_RAMP) and the tolerance
+// shrinks by ALIGN_TOL_SHRINK as the bar fills: the endgame is the fight.
+static const float        kAlignTol[]   = { 0.40f, 0.30f, 0.22f };  // radians either side, before the shrink
+static const float        kAlignDrift[] = { 0.90f, 1.40f, 2.00f };  // max drift speed (rad/s), before the ramp
+static const float        kAlignFill[]  = { 0.30f, 0.22f, 0.16f };  // bar added per aligned sec
+static const float        kAlignDrain[] = { 0.20f, 0.28f, 0.40f };  // bar drained per misaligned sec
 
 static void applyBrightness() {
   if (g_haveDisplay) oled.setContrast((uint8_t)map(g_brightness, 1, 5, 16, 255));
@@ -1455,20 +1463,28 @@ static void updateStir(uint32_t now, uint32_t dt, int32_t d) {
 
   if (act == 2) {
     // ---- Act 2: align the essences. The knob shifts your phase; the target
-    // phase drifts on a random heading that changes every ALIGN_RETARGET_MS.
-    // In tolerance the bar fills; out of it the bar drains — no spin speed
-    // helps, only staying locked on.
+    // phase drifts on a heading re-rolled every ALIGN_RETARGET_MS — but the
+    // heading is PERSISTENT (usually keeps its direction, ALIGN_FLIP_P chance
+    // of reversing), so the target genuinely travels instead of random-walking
+    // in place: leave the knob parked and it escapes. In tolerance the bar
+    // fills; out of it the bar drains — no spin speed helps, only tracking.
     s_alignPlayer = wrapPi(s_alignPlayer + ALIGN_KNOB_STEP * (float)d);
     if (now - s_alignHeadMs >= ALIGN_RETARGET_MS) {
       s_alignHeadMs = now;
-      float mag = (0.3f + 0.7f * frand()) * kAlignDrift[lvl];
-      s_alignVel = (esp_random() & 1) ? mag : -mag;
+      float mag = (0.5f + 0.5f * frand()) * kAlignDrift[lvl];
+      float dir = (s_alignVel == 0.0f) ? ((esp_random() & 1) ? 1.0f : -1.0f)
+                : (frand() < ALIGN_FLIP_P ? -1.0f : 1.0f) * copysignf(1.0f, s_alignVel);
+      s_alignVel = dir * mag;
     }
-    s_alignTarget = wrapPi(s_alignTarget + s_alignVel * (float)dt / 1000.0f);
+    // The endgame is the fight: drift speeds up and the band tightens with
+    // the bar, so the last stretch demands real tracking, not luck.
+    float ramp = 1.0f + ALIGN_RAMP * s_stirProgress;
+    s_alignTarget = wrapPi(s_alignTarget + s_alignVel * ramp * (float)dt / 1000.0f);
 
+    float tol  = kAlignTol[lvl] * (1.0f - ALIGN_TOL_SHRINK * s_stirProgress);
     float diff = wrapPi(s_alignPlayer - s_alignTarget);
     s_alignErr = fabsf(diff) / (float)M_PI;
-    s_alignOk  = fabsf(diff) <= kAlignTol[lvl];
+    s_alignOk  = fabsf(diff) <= tol;
     s_stirProgress += (s_alignOk ?  kAlignFill[lvl]
                                  : -kAlignDrain[lvl]) * (float)dt / 1000.0f;
 
@@ -2046,29 +2062,19 @@ static void renderReveal(uint32_t now) {
 
 // --- Act 3 ritual screens -------------------------------------------------
 // The incantation glyphs, drawn with primitives (no icon font, no flash cost):
-// a 300-degree arc with an arrowhead for the turns, a dotted ring for press.
+// fat straight left/right arrows for the turns (circular arrows proved too
+// alike at a glance), a ring with a hub for press.
 static void drawRitGlyph(uint8_t sym, int cx, int cy) {
-  const int R = 13;
   if (sym == SYM_PRESS) {
-    oled.drawCircle(cx, cy, R);
+    oled.drawCircle(cx, cy, 13);
     oled.drawDisc(cx, cy, 5);
     return;
   }
-  // In screen coords (y down) an increasing angle sweeps clockwise, so
-  // dir=+1 reads as "turn right" and dir=-1 as "turn left".
-  int dir = (sym == SYM_CW) ? 1 : -1;
-  for (float t = 0.35f; t < 5.6f; t += 0.10f) {
-    float a = (float)dir * t - (float)M_PI_2;   // arc starts at 12 o'clock
-    oled.drawPixel(cx + (int)lroundf(R * cosf(a)), cy + (int)lroundf(R * sinf(a)));
-  }
-  // Arrowhead at the arc's end, pointing along the direction of travel.
-  float ae = (float)dir * 5.6f - (float)M_PI_2;
-  float tx = -sinf(ae) * (float)dir, ty = cosf(ae) * (float)dir;  // unit tangent
-  float nx = cosf(ae),               ny = sinf(ae);               // unit radial
-  int hx = cx + (int)lroundf(R * cosf(ae)), hy = cy + (int)lroundf(R * sinf(ae));
-  oled.drawTriangle(hx + (int)lroundf(6.0f * tx), hy + (int)lroundf(6.0f * ty),
-                    hx + (int)lroundf(3.5f * nx), hy + (int)lroundf(3.5f * ny),
-                    hx - (int)lroundf(3.5f * nx), hy - (int)lroundf(3.5f * ny));
+  int dir = (sym == SYM_CW) ? 1 : -1;   // right / left
+  oled.drawBox(cx - (dir > 0 ? 20 : 6), cy - 2, 26, 5);            // shaft
+  oled.drawTriangle(cx + dir * 6, cy - 9,                          // big head
+                    cx + dir * 6, cy + 9,
+                    cx + dir * 20, cy);
 }
 
 static const char* ritSymWord(uint8_t sym) {

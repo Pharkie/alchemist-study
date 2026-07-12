@@ -563,24 +563,13 @@ RIT_WORDS = ["turn right", "turn left", "press"]   # SYM_CW, SYM_CCW, SYM_PRESS
 
 
 def rit_glyph(s, sym, cx, cy):
-    R = 13
-    if sym == 2:  # press: dotted ring + hub
-        s.draw_circle(cx, cy, R)
+    if sym == 2:  # press: ring + hub
+        s.draw_circle(cx, cy, 13)
         s.draw_disc(cx, cy, 5)
         return
-    d = 1 if sym == 0 else -1
-    t = 0.35
-    while t < 5.6:
-        a = d * t - math.pi / 2
-        s.draw_pixel(cx + lroundf(R * math.cos(a)), cy + lroundf(R * math.sin(a)))
-        t += 0.10
-    ae = d * 5.6 - math.pi / 2
-    tx, ty = -math.sin(ae) * d, math.cos(ae) * d
-    nx, ny = math.cos(ae), math.sin(ae)
-    hx, hy = cx + lroundf(R * math.cos(ae)), cy + lroundf(R * math.sin(ae))
-    s.draw_triangle(hx + lroundf(6.0 * tx), hy + lroundf(6.0 * ty),
-                    hx + lroundf(3.5 * nx), hy + lroundf(3.5 * ny),
-                    hx - lroundf(3.5 * nx), hy - lroundf(3.5 * ny))
+    d = 1 if sym == 0 else -1   # right / left
+    s.draw_box(cx - (20 if d > 0 else 6), cy - 2, 26, 5)
+    s.draw_triangle(cx + d * 6, cy - 9, cx + d * 6, cy + 9, cx + d * 20, cy)
 
 
 def corner_sparkles(s, now):

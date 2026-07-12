@@ -180,9 +180,11 @@ story's 1 → 2 → 3 bottle escalation walks the player up all three.
     band at <50 / <75 / <90 / ≥90 %).
   - *Act 2 — "align the essences":* the knob steers your solid wave into phase
     with a drifting ghost wave; the bar fills **only while aligned** and drains
-    while not. Aligned, the wave doubles up ("glows") and sparkles; the trill
+    while not. The drift keeps a persistent heading (occasionally reversing),
+    **speeds up and the tolerance tightens as the bar fills** — a parked knob
+    loses. Aligned, the wave doubles up ("glows") and sparkles; the trill
     is the hot/cold aid (closer = higher and steadier, far = low and warbling).
-    Tolerance / drift / fill rate scale with Stir Level (`kAlign*`).
+    Tolerance / drift / fill rate scale with Stir Level (`kAlign*`/`ALIGN_*`).
   - In both, the bar **always drains** (faster on harder levels); pause and it
     bleeds down, and once empty it waits a ~3 s grace before drifting back to
     IDENTIFY (turning the knob counts as activity, so a slow hunt can't fizzle).

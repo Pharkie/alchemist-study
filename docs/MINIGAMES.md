@@ -11,7 +11,7 @@ earned.
 | Act | Bottles | Mechanic | In code |
 |-----|---------|----------|---------|
 | 1 | one | **Classic stir** — spin to fill the power bar against constant decay (capped add rate, see [TUNING.md](TUNING.md)). | `updateStir()` act 1/3 path |
-| 2 | two | **Align the essences** — your wave (solid) must be brought into phase with a drifting ghost wave; the bar fills only while aligned, drains while not. The trill is the hot/cold aid: closer = higher and steadier, far off = low with a wide warble. | `updateStir()` act 2 path, `kAlign*` tunables |
+| 2 | two | **Align the essences** — your wave (solid) must be brought into phase with a drifting ghost wave; the bar fills only while aligned, drains while not. The drift has a persistent heading (occasionally reversing), speeds up and the tolerance tightens as the bar fills — a parked knob loses. The trill is the hot/cold aid: closer = higher and steadier, far off = low with a wide warble. | `updateStir()` act 2 path, `kAlign*`/`ALIGN_*` tunables |
 | 3 | three | **The Grand Brew** — the classic stir fills the bar, then the brew speaks a growing incantation of glyphs (turn right / turn left / press, each with its own note) and you repeat it back over three verses (Simon-style, verse lengths 2/3/4). A miss just replays the verse; finishing goes straight to the reveal. | `ST_RITUAL`, `updateRitual()`, `RIT_*` tunables |
 
 Design notes:
