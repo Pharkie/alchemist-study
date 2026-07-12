@@ -174,7 +174,7 @@ story's 1 → 2 → 3 bottle escalation walks the player up all three.
 - **STIRRING** — encoder is turning.
   - *Acts 1 & 3:* a **power bar** fills as you stir, with a swirling vortex +
     rising trill (~320→1100 Hz). The add rate is **capped**, so spinning faster
-    can't rush it — each **Stir Level** (Easy/Medium/Hard) has a guaranteed
+    can't rush it — each **Difficulty** (Easy/Medium/Hard) has a guaranteed
     **minimum fill time** (~3 / 5 / 10 s; see [docs/TUNING.md](docs/TUNING.md)).
     An escalating **caption** climbs with the bar (random brew-themed lines per
     band at <50 / <75 / <90 / ≥90 %).
@@ -184,7 +184,7 @@ story's 1 → 2 → 3 bottle escalation walks the player up all three.
     **speeds up and the tolerance tightens as the bar fills** — a parked knob
     loses. Aligned, the wave doubles up ("glows") and sparkles; the trill
     is the hot/cold aid (closer = higher and steadier, far = low and warbling).
-    Tolerance / drift / fill rate scale with Stir Level (`kAlign*`/`ALIGN_*`).
+    Tolerance / drift / fill rate scale with Difficulty (`kAlign*`/`ALIGN_*`).
   - In both, the bar **always drains** (faster on harder levels); pause and it
     bleeds down, and once empty it waits a ~3 s grace before drifting back to
     IDENTIFY (turning the knob counts as activity, so a slow hunt can't fizzle).
@@ -239,9 +239,12 @@ Items are a data table (`kMenu` in `main.cpp`) of `{label, kind, get/set/persist
 
 - **Realm** — 7 universes: Skyrim, Baldur's Gate 3, The Witcher 3, World of
   Warcraft, Zelda, Minecraft, Ultima VII (persisted; replaces the old long-press)
-- **Mute** — Off / On (gates all audio: chime, trill, jingles, error beep)
+- **Volume** — 0–5 (0 = mute; gates all audio). Loudness is the buzzer's LEDC
+  duty cycle (`kVolDuty`, `buzzTone()` — main.cpp drives LEDC directly, not
+  `tone()`), applied live while editing with a feedback blip
 - **Bright** — 1–5 (OLED contrast via `setContrast`)
-- **Stir Level** — Easy / Medium / Hard (fill difficulty curve)
+- **Difficulty** — Easy / Medium / Hard (fill difficulty curve; NVS key and
+  code identifiers still say `stir`/`g_stirLevelIdx`)
 - **Sleep** — screen-blank timeout: Never / 10s / 1m / 5m / 30m. The OLED powers
   down (`setPowerSave`) after that long with no input and wakes on any encoder /
   reed / button activity. A waking **turn or press is swallowed** so it doesn't
@@ -252,11 +255,11 @@ Items are a data table (`kMenu` in `main.cpp`) of `{label, kind, get/set/persist
 - **Firmware** — shows the version string
 - **Exit** — back to idle
 
-Realm, Mute, Brightness, Stir Level and Sleep all persist to NVS (written when
+Realm, Volume, Brightness, Difficulty and Sleep all persist to NVS (written when
 an edit is confirmed, not per step).
 
 On boot, an animated ~3 s splash ("Welcome to the Alchemist's Study", growing
-title + rising sparkle-chime, gated by Mute) plays before the idle screen.
+title + rising sparkle-chime, silent at Volume 0) plays before the idle screen.
 
 ## Potion lookup — index by combo `1..7` (`0` = idle)
 

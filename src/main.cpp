@@ -176,7 +176,7 @@ static uint8_t  g_combo    = 0;            // committed combo (0..7)
 static Universe g_universe = UNI_SKYRIM;
 
 // Persisted settings + UI cursors.
-static bool     g_mute        = false;
+static uint8_t  g_volume      = 3;         // 0 = mute .. 5 = full (LEDC duty)
 static uint8_t  g_brightness  = 3;         // 1..5
 static uint8_t  g_stirLevelIdx = 1;        // index into kStirLabels (Easy/Medium/Hard)
 static uint8_t  g_blankIdx     = 0;        // screen-blank timeout (index into kBlankMs/kBlankLabels)
@@ -620,14 +620,26 @@ static float wrapPi(float a) {             // wrap an angle to [-pi, pi]
   return a;
 }
 
+// All buzzer output funnels through here so Volume works. The passive buzzer
+// is driven via LEDC directly (tone() hides the duty cycle) and loudness is
+// the pulse width: kVolDuty maps Volume 0..5 onto a 10-bit duty, 512 being
+// the 50% square that tone() used to produce. PIN_BUZZER is ledcAttach'd
+// once in setup().
+static const uint16_t kVolDuty[6] = { 0, 6, 20, 60, 180, 512 };
+
+static void buzzTone(uint16_t f) {
+  if (f == 0 || g_volume == 0) { ledcWriteTone(PIN_BUZZER, 0); return; }
+  ledcWriteTone(PIN_BUZZER, f);
+  ledcWrite(PIN_BUZZER, kVolDuty[g_volume]);
+}
+static void buzzOff() { ledcWriteTone(PIN_BUZZER, 0); }
+
 static void playCurrentNote() {
-  uint16_t f = s_melody[s_melodyIdx].freq;
-  if (f == 0) noTone(PIN_BUZZER);
-  else        tone(PIN_BUZZER, f);
+  buzzTone(s_melody[s_melodyIdx].freq);
 }
 
 static void startMelody(const Note* m, uint8_t n, uint32_t now) {
-  if (g_mute) return;
+  if (g_volume == 0) return;
   s_melody = m;
   s_melodyLen = n;
   s_melodyIdx = 0;
@@ -639,8 +651,8 @@ static void startMelody(const Note* m, uint8_t n, uint32_t now) {
 }
 
 static void updateAudio(uint32_t now) {
-  if (g_mute) {
-    if (s_buzzerOn || s_melodyActive) { noTone(PIN_BUZZER); s_buzzerOn = false; s_melodyActive = false; }
+  if (g_volume == 0) {
+    if (s_buzzerOn || s_melodyActive) { buzzOff(); s_buzzerOn = false; s_melodyActive = false; }
     s_trillHz = 0;
     return;
   }
@@ -649,7 +661,7 @@ static void updateAudio(uint32_t now) {
       s_melodyIdx++;
       if (s_melodyIdx >= s_melodyLen) {
         s_melodyActive = false;
-        noTone(PIN_BUZZER);
+        buzzOff();
       } else {
         s_noteStartMs = now;
         playCurrentNote();
@@ -679,11 +691,11 @@ static void updateAudio(uint32_t now) {
     if (f < 50) f = 50;
     if ((uint16_t)f != s_trillHz) {   // re-arm LEDC only when the pitch changes
       s_trillHz = (uint16_t)f;
-      tone(PIN_BUZZER, s_trillHz);
+      buzzTone(s_trillHz);
     }
     s_buzzerOn = true;
   } else if (s_buzzerOn) {
-    noTone(PIN_BUZZER);
+    buzzOff();
     s_buzzerOn = false;
     s_trillHz = 0;
   }
@@ -1070,7 +1082,7 @@ static void storyPress() {
       break;
     case N_TUNE:
       s_melodyActive = false;                // stop strumming mid-bar
-      noTone(PIN_BUZZER);
+      buzzOff();
       storyGoto(n.nextA);
       break;
     case N_SCENE:
@@ -1177,7 +1189,6 @@ static void updateStory(uint32_t now, uint32_t dt) {
 }
 
 // ---- Settings model (reusable mini-menu) -------------------------------
-static const char* const kOnOff[] = { "Off", "On" };
 
 // Stir level: difficulty curve for filling the power bar. Each increment gets
 // harder the fuller (further right) the bar already is; higher levels start a
@@ -1219,9 +1230,13 @@ static int  getRealm()       { return (int)g_universe; }
 static void setRealm(int v)  { g_universe = (Universe)v;
                                startMelody(MEL_TOGGLE, ARRAY_COUNT(MEL_TOGGLE), g_now); }
 static void persistRealm()   { prefs.putUChar("universe", (uint8_t)g_universe); }
-static int  getMute()        { return g_mute ? 1 : 0; }
-static void setMute(int v)   { g_mute = (v != 0); if (g_mute) noTone(PIN_BUZZER); }
-static void persistMute()    { prefs.putUChar("mute", g_mute ? 1 : 0); }
+static int  getVolume()      { return g_volume; }
+static void setVolume(int v) {         // applied live: blip at the new loudness
+  g_volume = (uint8_t)v;
+  if (g_volume == 0) buzzOff();
+  else startMelody(MEL_TOGGLE, ARRAY_COUNT(MEL_TOGGLE), g_now);
+}
+static void persistVolume()  { prefs.putUChar("vol", g_volume); }
 static int  getBright()      { return g_brightness; }
 static void setBright(int v) { g_brightness = (uint8_t)v; applyBrightness(); }
 static void persistBright()  { prefs.putUChar("bright", g_brightness); }
@@ -1299,9 +1314,9 @@ struct MenuItem {
 
 static const MenuItem kMenu[] = {
   { "Realm",        K_CHOICE, getRealm,     setRealm,     persistRealm,     kUniverseName, UNI_COUNT, 0, 0, nullptr,    nullptr      },
-  { "Mute",         K_CHOICE, getMute,      setMute,      persistMute,      kOnOff,        2,         0, 0, nullptr,    nullptr      },
+  { "Volume",       K_RANGE,  getVolume,    setVolume,    persistVolume,    nullptr,       0,         0, 5, nullptr,    nullptr      },
   { "Bright",       K_RANGE,  getBright,    setBright,    persistBright,    nullptr,       0,         1, 5, nullptr,    nullptr      },
-  { "Stir Level",   K_CHOICE, getStirLevel, setStirLevel, persistStirLevel, kStirLabels,   kStirN,    0, 0, nullptr,    nullptr      },
+  { "Difficulty",   K_CHOICE, getStirLevel, setStirLevel, persistStirLevel, kStirLabels,   kStirN,    0, 0, nullptr,    nullptr      },
   { "Sleep",        K_CHOICE, getBlank,     setBlank,     persistBlank,     kBlankLabels,  kBlankN,   0, 0, nullptr,    nullptr      },
   { "Hardware Test",K_ACTION, nullptr,      nullptr,      nullptr,          nullptr,       0,         0, 0, nullptr,    diagEnter    },
   { "Firmware",     K_INFO,   nullptr,      nullptr,      nullptr,          nullptr,       0,         0, 0, FW_VERSION, nullptr      },
@@ -2166,7 +2181,7 @@ static void renderRitual(uint32_t now) {
       // The final verse is spoken BLIND — notes only, no glyphs — so the
       // per-symbol voices become load-bearing. Muted players get glyphs
       // back, or the verse would be unpassable.
-      bool blind = (s_ritRound == RIT_ROUNDS - 1) && !g_mute;
+      bool blind = (s_ritRound == RIT_ROUNDS - 1) && g_volume > 0;
       snprintf(hdr, sizeof(hdr), "verse %d of %d - %s",
                s_ritRound + 1, RIT_ROUNDS, blind ? "listen" : "watch");
       oled.setFont(u8g2_font_5x8_tr);
@@ -2959,8 +2974,8 @@ static void bootSplash() {
     }
     stars(f);
     oled.sendBuffer();
-    if (!g_mute && f == 0) tone(PIN_BUZZER, 392);   // G4
-    if (!g_mute && f == 6) tone(PIN_BUZZER, 523);   // C5
+    if (f == 0) buzzTone(392);   // G4
+    if (f == 6) buzzTone(523);   // C5
     delay(58);
   }
 
@@ -2971,7 +2986,7 @@ static void bootSplash() {
     title(u8g2_font_ncenR08_tr, -4 + (17 * f) / 10);  // welcome slides -4 -> 13
     stars(f + 12);
     oled.sendBuffer();
-    if (!g_mute && f == 0) tone(PIN_BUZZER, 587);   // D5
+    if (f == 0) buzzTone(587);   // D5
     delay(46);
   }
 
@@ -2988,7 +3003,7 @@ static void bootSplash() {
       oled.sendBuffer();
       delay(52);
     }
-    if (!g_mute) tone(PIN_BUZZER, notes[s]);
+    buzzTone(notes[s]);
   }
 
   // Phase 4: hold with motes orbiting the title, then a final flourish (~0.9s).
@@ -3001,11 +3016,11 @@ static void bootSplash() {
     oled.drawDisc(64 + (int)lroundf(52.0f * cosf(a)), 32 + (int)lroundf(24.0f * sinf(a)), 1);
     oled.drawDisc(64 - (int)lroundf(52.0f * cosf(a)), 32 - (int)lroundf(24.0f * sinf(a)), 1);
     oled.sendBuffer();
-    if (!g_mute && f == 1) tone(PIN_BUZZER, 1319);  // E6 sparkle
-    if (!g_mute && f == 6) tone(PIN_BUZZER, 1047);  // settle on C6
+    if (f == 1) buzzTone(1319);  // E6 sparkle
+    if (f == 6) buzzTone(1047);  // settle on C6
     delay(56);
   }
-  noTone(PIN_BUZZER);
+  buzzOff();
 }
 
 // ---- Arduino entry points ----------------------------------------------
@@ -3026,13 +3041,15 @@ void setup() {
 
   encoderBegin();   // internal pullups, ISR decode on every edge (quadrature.h)
 
-  pinMode(PIN_BUZZER, OUTPUT);
+  ledcAttach(PIN_BUZZER, 2000, 10);   // buzzer PWM; buzzTone drives freq + volume duty
 
   // ---- Load persisted settings (before the chime, so Mute is honored) ----
   prefs.begin("alchemy", false);
   g_universe   = (Universe)prefs.getUChar("universe", UNI_SKYRIM);
   if (g_universe >= UNI_COUNT) g_universe = UNI_SKYRIM;
-  g_mute       = prefs.getUChar("mute", 0) != 0;
+  // Volume 0-5 (0 = mute); migrates the old boolean "mute" key on first boot.
+  g_volume     = prefs.getUChar("vol", prefs.getUChar("mute", 0) ? 0 : 3);
+  if (g_volume > 5) g_volume = 5;
   g_brightness = prefs.getUChar("bright", 3);
   if (g_brightness < 1) g_brightness = 1;
   if (g_brightness > 5) g_brightness = 5;
@@ -3075,7 +3092,7 @@ void setup() {
                 PIN_REED_SLOT1, PIN_REED_SLOT2, PIN_REED_SLOT3);
   Serial.printf("  encoder: A=GPIO%d B=GPIO%d SW=GPIO%d\n",
                 PIN_ENC_A, PIN_ENC_B, PIN_ENC_SW);
-  Serial.printf("  buzzer:  GPIO%d  (mute=%s)\n", PIN_BUZZER, g_mute ? "on" : "off");
+  Serial.printf("  buzzer:  GPIO%d  (volume=%u)\n", PIN_BUZZER, g_volume);
   if (g_haveDisplay)
     Serial.printf("  OLED:    SDA=GPIO%d SCL=GPIO%d -> FOUND at 0x%02X [OK]\n",
                   PIN_OLED_SDA, PIN_OLED_SCL, oledAddr);
@@ -3087,8 +3104,7 @@ void setup() {
   if (!g_haveDisplay) {
     Serial.println("  !! No OLED at 0x3C/0x3D. Running HEADLESS (no screen).");
     Serial.println("  !! Check VCC=3V3, GND, SDA->GPIO5, SCL->GPIO6; or run c3-hwcheck.");
-    if (!g_mute)
-      for (int i = 0; i < 3; i++) { tone(PIN_BUZZER, 180); delay(120); noTone(PIN_BUZZER); delay(90); }
+    for (int i = 0; i < 3; i++) { buzzTone(180); delay(120); buzzOff(); delay(90); }
   }
   Serial.println("--------------------");
 

@@ -21,7 +21,7 @@ Design notes:
   ritual answer (12 s) replays the verse instead of aborting.
 - **Audio is mechanical, not decorative.** Act 2's pitch/warble carries real
   information; act 3's per-symbol notes make the sequence memorisable by ear.
-  Everything still gates behind Mute.
+  Everything still gates behind Volume 0 (mute).
 - **The state machine stays canonical.** The ritual is a state with re-stamped
   sub-phases (`RI_INTRO → RI_SHOW → RI_INPUT → RI_GOOD/RI_MISS`), per
   [ARCHITECTURE.md](ARCHITECTURE.md). The combo stays latched through
