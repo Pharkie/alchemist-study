@@ -144,7 +144,7 @@ static constexpr float    ALIGN_KNOB_STEP   = 0.05f; // phase radians per encode
 static constexpr uint32_t ALIGN_RETARGET_MS = 700;   // how often the drift picks a new heading
 static constexpr float    ALIGN_FLIP_P      = 0.25f; // chance a new heading reverses direction
 static constexpr float    ALIGN_RAMP        = 1.0f;  // extra drift speed gained by a full bar (x2 at top)
-static constexpr float    ALIGN_TOL_SHRINK  = 0.4f;  // fraction of tolerance lost by a full bar
+static constexpr float    ALIGN_TOL_SHRINK  = 0.3f;  // fraction of tolerance lost by a full bar
 
 // Act 3 — the Grand Brew ritual (three-ingredient master potion).
 static constexpr uint32_t RIT_INTRO_MS         = 1800;  // "The Grand Brew" card
@@ -1170,7 +1170,10 @@ static constexpr int      kStirN        = 3;
 // while it isn't — so aligned-time to fill is ~1/fill sec plus hunting time.
 // Drift speed is multiplied by up to (1 + ALIGN_RAMP) and the tolerance
 // shrinks by ALIGN_TOL_SHRINK as the bar fills: the endgame is the fight.
-static const float        kAlignTol[]   = { 0.40f, 0.30f, 0.22f };  // radians either side, before the shrink
+// Tolerance sizing: the band must be wide enough to REACT inside — the time
+// to drift across it (tol / ramped drift speed) should stay a few tenths of
+// a second, or "aligned" only exists at bang-on and the game feels rigged.
+static const float        kAlignTol[]   = { 0.80f, 0.60f, 0.45f };  // radians either side, before the shrink
 static const float        kAlignDrift[] = { 0.90f, 1.40f, 2.00f };  // max drift speed (rad/s), before the ramp
 static const float        kAlignFill[]  = { 0.30f, 0.22f, 0.16f };  // bar added per aligned sec
 static const float        kAlignDrain[] = { 0.20f, 0.28f, 0.40f };  // bar drained per misaligned sec
