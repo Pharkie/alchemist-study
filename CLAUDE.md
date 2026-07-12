@@ -119,13 +119,20 @@ story's 1 → 2 → 3 bottle escalation walks the player up all three.
   machinery outside battle (wrong potion named, retried at leisure, no
   backing out). **Recipe rule:** every act's target recipe is SPOKEN in
   dialogue before the brew and repeated as the brew-screen hint.
-  **Text-fit gate:** authored story text (card/speak bodies, titles, brew
-  hints, battle intros) is checked against each renderer's real wrap
-  budget by `tools/check_story_text.py`, which parses the tables out of
-  main.cpp and runs as a PlatformIO pre-script — **overflowing text fails
-  the build**, naming the node and the words that would be dropped
-  (drawWrapped truncates silently on-device). If a renderer's budget
-  changes, update the constants at the top of that script. `N_SPEAK` renders a character: a procedural **emblem**
+  **Build gates (don't bypass them):** contracts that used to be prose are
+  enforced by PlatformIO pre-scripts — a violation FAILS the build naming
+  the offender. `tools/check_story_text.py`: authored story text
+  (card/speak bodies, titles, brew hints, battle intros) must fit each
+  renderer's real wrap budget — drawWrapped truncates silently on-device;
+  budgets live at the top of the script, keep them in step if a render
+  call site changes. `tools/check_invariants.py`: story-graph integrity
+  (successors in range, all nodes reachable, brew combos 1..7), the
+  battle-maths rule (enemy HP > 14), kStirCap > kStirDecay, the pin map
+  vs its doc copies (CLAUDE.md / CIRCUIT.md / HARDWARE_TEST.md), the d20
+  tables and every multi-word display string shared with
+  tools/screens_preview.py (twin drift), and menu/potion names appearing
+  in CLAUDE.md. When adding content, run `pio run` early — the gates give
+  precise errors. `N_SPEAK` renders a character: a procedural **emblem**
   on the left (the node's `art` fn — `drawJarl` is a bobbing, glinting crown;
   emblems beat literal faces at 30 px), speech bubble with tail on the right,
   speaker name beneath.
