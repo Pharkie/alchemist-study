@@ -1257,17 +1257,13 @@ static void homePressNothing() {   // nothing to confirm until bottles arrive
 }
 
 #ifdef BENCH_SIM_COMBO
-// Bench shortcut: pressing the Place panel seats simulated bottles — two
-// (act 2's align game), then three (the ritual), then one (classic stir).
-// Long-press mid-brew drops them again (see onLongPress).
+// Bench shortcut on the Place panel: SHORT press fakes two bottles (act 2's
+// align game), LONG press fakes all three (stir -> the Grand Brew). Long-press
+// mid-brew drops the fakes again (see onLongPress). Turn to start brewing.
 static void homePressSimCombo() {
-  static const uint8_t cycle[] = { 0x03, 0x07, 0x01 };
-  static uint8_t i = 0;
-  s_simCombo = cycle[i];
-  i = (i + 1) % (uint8_t)ARRAY_COUNT(cycle);
+  s_simCombo = 0x03;
   startMelody(MEL_TOGGLE, ARRAY_COUNT(MEL_TOGGLE), g_now);
-  Serial.printf("[sim] combo %u%u%u seated\n",
-                (s_simCombo >> 2) & 1, (s_simCombo >> 1) & 1, s_simCombo & 1);
+  Serial.println("[sim] two bottles faked -> act 2");
 }
 #endif
 
@@ -1436,6 +1432,15 @@ static void onLongPress(uint32_t now) {
       break;
     case ST_DIAG:     settingsEnter(); break;     // diagnostic back to the menu
     case ST_STORY:    storyEnd();      break;     // abandon the quest
+#ifdef BENCH_SIM_COMBO
+    case ST_IDLE:                                 // Place panel: fake all three
+      if (s_homePanel == HP_PLACE) {
+        s_simCombo = 0x07;
+        startMelody(MEL_TOGGLE, ARRAY_COUNT(MEL_TOGGLE), g_now);
+        Serial.println("[sim] three bottles faked -> act 3");
+      }
+      break;
+#endif
     case ST_IDENTIFY:
     case ST_STIRRING:
       if (s_storyBrew) storyEnd();                // abandon mid-brew too
