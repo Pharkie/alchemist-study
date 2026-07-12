@@ -634,6 +634,14 @@ def ritual_miss(s):
     s.draw_centered("listen again...", 56)
 
 
+def story_pause(s, idx=0):
+    s.draw_hline(44, 12, 40)
+    diamond(s, 40, 12); diamond(s, 88, 12)
+    s.set_font("helvR08")
+    s.draw_centered("The quest waits...", 32)
+    choice_line(s, "Quest on" if idx == 0 else "Quit")
+
+
 def build():
     panels = ["place", "story", "settings"]
     shots = []
@@ -713,6 +721,7 @@ def build():
     shot(lambda s: ritual_miss(s))
     shot(lambda s: ritual_show(s, 4, 4, 0, blind=True))
     shot(lambda s: ritual_good(s, now, done=True))
+    shot(lambda s: story_pause(s, 0))
     return shots
 
 

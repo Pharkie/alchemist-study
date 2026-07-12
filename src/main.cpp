@@ -2876,9 +2876,12 @@ static void renderStorySpeak(const StoryNode& n, uint32_t now) {
 static void renderStoryPause(uint32_t now) {
   (void)now;
   oled.clearBuffer();
-  drawFancyFrame();
+  // No fancy frame here: drawChoiceLine paints the bottom rows, which would
+  // sever a border. Same idiom as the story's choice screens instead.
+  oled.drawHLine(44, 12, 40);
+  drawDiamond(40, 12); drawDiamond(88, 12);
   oled.setFont(u8g2_font_helvR08_tr);
-  drawCenteredF("The quest waits...", 24);
+  drawCenteredF("The quest waits...", 32);
   drawChoiceLine(s_pauseIdx == 0 ? "Quest on" : "Quit");
   oled.sendBuffer();
 }

@@ -82,6 +82,9 @@ SECTIONS = [
         (46, "Ritual — final verse, spoken blind"),
         (47, "Ritual — the incantation holds"),
     ]),
+    ("Story — idle pause", [
+        (48, "15 s idle — Quest on / Quit"),
+    ]),
 ]
 
 
