@@ -147,16 +147,24 @@ static constexpr float    ALIGN_RAMP        = 0.5f;  // extra drift speed gained
 static constexpr float    ALIGN_TOL_SHRINK  = 0.15f; // fraction of tolerance lost by a full bar
 
 // Act 3 — the Grand Brew ritual (three-ingredient master potion).
+// Difficulty shapes the INCANTATION (verse count/length, how much is spoken
+// blind) — never the glyph pace: faster reading is a UX hazard, not a
+// welcome difficulty axis (bench verdict). See kRit* tables below.
 static constexpr uint32_t RIT_INTRO_MS         = 1800;  // "The Grand Brew" card
-static constexpr uint32_t RIT_GLYPH_MS         = 650;   // per glyph while the incantation plays
+static constexpr uint32_t RIT_GLYPH_MS         = 750;   // per glyph, FIXED across levels
 static constexpr uint32_t RIT_GOOD_MS          = 900;   // "well stirred" between verses
 static constexpr uint32_t RIT_MISS_MS          = 1200;  // "it resists" before a replay
 static constexpr uint32_t RIT_ECHO_MS          = 280;   // let the last answer's note ring
                                                         // before the interlude jingle takes the buzzer
 static constexpr uint32_t RIT_INPUT_TIMEOUT_MS = 12000; // stalled answer -> replay the verse
 static constexpr int32_t  RIT_TURN_COUNTS      = 4;     // counts (~1 detent) per turn answer
-static constexpr int      RIT_SEQ_LEN          = 6;     // full incantation length
-static constexpr int      RIT_ROUNDS           = 4;     // verse lengths 3..6 (prefixes)
+static constexpr int      RIT_SEQ_LEN          = 7;     // longest verse (Hard's final)
+// Per Difficulty (Easy/Medium/Hard): verse count, the first verse's length
+// (verse i is a prefix of baseLen+i symbols), and how many FINAL verses play
+// blind (audio only; blind is skipped entirely at Volume 0).
+static const int kRitRounds[]  = { 3, 4, 4 };   // Easy 3/4/5, Med 3/4/5/6,
+static const int kRitBaseLen[] = { 3, 3, 4 };   //   Hard 4/5/6/7
+static const int kRitBlind[]   = { 0, 1, 2 };   // none / final / final two
 
 // Firmware version — keep in step with the git tag / GitHub release.
 #define FW_VERSION "v0.1"
@@ -178,7 +186,7 @@ static Universe g_universe = UNI_SKYRIM;
 // Persisted settings + UI cursors.
 static uint8_t  g_volume      = 3;         // 0 = mute .. 5 = full (LEDC duty)
 static uint8_t  g_brightness  = 3;         // 1..5
-static uint8_t  g_stirLevelIdx = 1;        // index into kStirLabels (Easy/Medium/Hard)
+static uint8_t  g_stirLevelIdx = 1;        // skill: 0 Apprentice / 1 Graduate / 2 Professor
 static uint8_t  g_blankIdx     = 0;        // screen-blank timeout (index into kBlankMs/kBlankLabels)
 static uint32_t g_lastActivityMs = 0;      // last input (encoder/reed/button), for blanking
 static bool     g_screenOff    = false;    // true while the panel is blanked (asleep)
@@ -275,6 +283,12 @@ static Universe s_prevUniverse = UNI_SKYRIM;   // restored when the story ends
 static bool     s_storyPause = false;
 static int      s_pauseIdx   = 0;     // 0 = Quest on, 1 = Quit
 static constexpr uint32_t STORY_PAUSE_MS = 15000;
+// Skill select — every quest OPENS by asking, so difficulty is never hidden
+// in a menu. The chosen index IS g_stirLevelIdx (persisted), so free play
+// inherits the last skill sworn at a quest start.
+static const char* const kSkillLabels[] = { "Apprentice", "Graduate", "Professor" };
+static bool     s_skillSel = false;   // asking "Your skill, alchemist?"
+static int      s_skillIdx = 1;       // spinner position while asking
 static constexpr int PLAYER_MAX_HP   = 30;
 static constexpr int STORY_START_GOLD = 7;
 static constexpr int CRIT_ON_BITE  = 2;   // this bite is the crit (unless already
@@ -812,6 +826,7 @@ static void storyEnd() {
   g_universe = s_prevUniverse;
   s_storyBrew = false;
   s_storyPause = false;
+  s_skillSel = false;
   enterCombo(s_sensedCombo);
   if (g_state == ST_IDLE) { s_homePanel = HP_QUEST; s_homeX = (float)(PANEL_W * HP_QUEST); }
 }
@@ -848,8 +863,9 @@ static void storyBegin() {
   s_storyBrew = false;
   s_storyPause = false;
   s_story = kStorySkyrim;
+  s_skillSel = true;                       // every quest opens with the question
+  s_skillIdx = g_stirLevelIdx;             // spinner starts on the current skill
   enterState(ST_STORY);
-  storyGoto(0);
 }
 
 // The enemy's turn. Authored beat: the CRIT_ON_BITE'th bite is the crit that
@@ -959,12 +975,13 @@ static void startReveal(uint32_t now) {
 // ---- Act 3: the Grand Brew ritual ---------------------------------------
 // All three essences demand more than stirring: after the bar fills, the brew
 // speaks a growing incantation of glyphs (turn right / turn left / press) and
-// you must repeat it back. RIT_ROUNDS verses, each a longer prefix of the same
-// RIT_SEQ_LEN-symbol sequence (classic Simon). A wrong answer just replays the
+// you must repeat it back. kRitRounds[] verses per Difficulty, each a longer
+// prefix of one random sequence (classic Simon). A wrong answer just replays the
 // verse — the master potion should feel earned, not punishing. Inside a story
 // brew the finished incantation hands to storyBrewResolve, not the reveal.
 
-static int ritRoundLen() { return s_ritRound + 3; }   // verse lengths 3, 4, 5, 6
+static int ritRounds()   { return kRitRounds[g_stirLevelIdx]; }
+static int ritRoundLen() { return s_ritRound + kRitBaseLen[g_stirLevelIdx]; }
 
 static void playSymTone(uint8_t sym, uint32_t now) {
   switch (sym) {
@@ -1013,7 +1030,7 @@ static void ritInput(uint8_t sym, uint32_t now) {
   s_ritPhase = RI_GOOD;                 // verse (maybe the whole incantation) done
   g_stateMs = now;
   s_ritChimed = false;
-  s_ritDone = (s_ritRound >= RIT_ROUNDS - 1);
+  s_ritDone = (s_ritRound >= ritRounds() - 1);
 }
 
 static void updateRitual(uint32_t now, int32_t d) {
@@ -1073,6 +1090,11 @@ static void updateRitual(uint32_t now, int32_t d) {
 // Turning only matters when a choice spinner is on screen: each detent
 // cycles the option shown on the bottom line (either direction works).
 static void storyNav(int32_t d) {
+  if (s_skillSel) {                        // skill spinner: three options, wraps
+    int steps = navSteps(d);
+    if (steps) s_skillIdx = ((s_skillIdx + steps) % 3 + 3) % 3;
+    return;
+  }
   if (s_storyPause) {                      // pause spinner: two options, wraps
     if (navSteps(d)) s_pauseIdx ^= 1;
     return;
@@ -1086,6 +1108,14 @@ static void storyNav(int32_t d) {
 }
 
 static void storyPress() {
+  if (s_skillSel) {
+    g_stirLevelIdx = (uint8_t)s_skillIdx;  // the oath holds beyond the quest:
+    prefs.putUChar("stirlvl", g_stirLevelIdx);  // free play brews at this skill
+    s_skillSel = false;
+    startMelody(MEL_TOGGLE, ARRAY_COUNT(MEL_TOGGLE), g_now);
+    storyGoto(0);
+    return;
+  }
   if (s_storyPause) {
     if (s_pauseIdx == 0) s_storyPause = false;   // Quest on: exactly where you were
     else storyEnd();                             // Quit: back to the carousel
@@ -1145,6 +1175,7 @@ static void updateStory(uint32_t now, uint32_t dt) {
   // Idle raises the pause spinner; while it's up the story sim freezes (a
   // waiting battle beat resumes instantly on "Quest on" — harmless, since
   // pause can only trigger on screens already waiting for input).
+  if (s_skillSel) return;                  // waiting on the opening question
   if (!s_storyPause && (uint32_t)(now - g_lastActivityMs) >= STORY_PAUSE_MS) {
     s_storyPause = true;
     s_pauseIdx = 0;
@@ -1218,7 +1249,6 @@ static void updateStory(uint32_t now, uint32_t dt) {
 // Stir level: difficulty curve for filling the power bar. Each increment gets
 // harder the fuller (further right) the bar already is; higher levels start a
 // touch slower and slow down much more steeply toward the top.
-static const char* const  kStirLabels[] = { "Easy", "Medium", "Hard" };
 // The add rate is CAPPED, so spinning faster than (cap/gain) counts/sec gives
 // NO benefit. Each level therefore has a guaranteed MINIMUM fill time of about
 // 1/(cap - decay) seconds, independent of how fast anyone can spin:
@@ -1265,9 +1295,6 @@ static void persistVolume()  { prefs.putUChar("vol", g_volume); }
 static int  getBright()      { return g_brightness; }
 static void setBright(int v) { g_brightness = (uint8_t)v; applyBrightness(); }
 static void persistBright()  { prefs.putUChar("bright", g_brightness); }
-static int  getStirLevel()    { return g_stirLevelIdx; }
-static void setStirLevel(int v){ g_stirLevelIdx = (uint8_t)v; }
-static void persistStirLevel(){ prefs.putUChar("stirlvl", g_stirLevelIdx); }
 
 // Screen-blank (screensaver) timeout. Index 0 = Never; the panel powers down
 // after this much input idle and wakes on any encoder/reed/button activity.
@@ -1342,7 +1369,6 @@ static const MenuItem kMenu[] = {
   { "Realm",        K_CHOICE, getRealm,     setRealm,     persistRealm,     kUniverseName, UNI_COUNT, 0, 0, nullptr,    nullptr      },
   { "Volume",       K_RANGE,  getVolume,    setVolume,    persistVolume,    nullptr,       0,         0, 5, nullptr,    nullptr      },
   { "Bright",       K_RANGE,  getBright,    setBright,    persistBright,    nullptr,       0,         1, 5, nullptr,    nullptr      },
-  { "Difficulty",   K_CHOICE, getStirLevel, setStirLevel, persistStirLevel, kStirLabels,   kStirN,    0, 0, nullptr,    nullptr      },
   { "Sleep",        K_CHOICE, getBlank,     setBlank,     persistBlank,     kBlankLabels,  kBlankN,   0, 0, nullptr,    nullptr      },
   { "Hardware Test",K_ACTION, nullptr,      nullptr,      nullptr,          nullptr,       0,         0, 0, nullptr,    diagEnter    },
   { "Firmware",     K_INFO,   nullptr,      nullptr,      nullptr,          nullptr,       0,         0, 0, FW_VERSION, nullptr      },
@@ -2206,9 +2232,10 @@ static void renderRitual(uint32_t now) {
       // The final verse is spoken BLIND — notes only, no glyphs — so the
       // per-symbol voices become load-bearing. Muted players get glyphs
       // back, or the verse would be unpassable.
-      bool blind = (s_ritRound == RIT_ROUNDS - 1) && g_volume > 0;
+      bool blind = (s_ritRound >= ritRounds() - kRitBlind[g_stirLevelIdx]) &&
+                   g_volume > 0;
       snprintf(hdr, sizeof(hdr), "verse %d of %d - %s",
-               s_ritRound + 1, RIT_ROUNDS, blind ? "listen" : "watch");
+               s_ritRound + 1, ritRounds(), blind ? "listen" : "watch");
       oled.setFont(u8g2_font_5x8_tr);
       drawCenteredF(hdr, 8);
       int idx = (int)(el / RIT_GLYPH_MS);
@@ -2229,7 +2256,7 @@ static void renderRitual(uint32_t now) {
     }
 
     case RI_INPUT: {
-      snprintf(hdr, sizeof(hdr), "verse %d of %d - repeat", s_ritRound + 1, RIT_ROUNDS);
+      snprintf(hdr, sizeof(hdr), "verse %d of %d - repeat", s_ritRound + 1, ritRounds());
       oled.setFont(u8g2_font_5x8_tr);
       drawCenteredF(hdr, 8);
       // One slot per symbol this verse: filled = answered, the next blinks.
@@ -2886,7 +2913,19 @@ static void renderStoryPause(uint32_t now) {
   oled.sendBuffer();
 }
 
+// The opening question: skill chosen fresh at every quest start.
+static void renderSkillSelect() {
+  oled.clearBuffer();
+  oled.drawHLine(44, 12, 40);
+  drawDiamond(40, 12); drawDiamond(88, 12);
+  oled.setFont(u8g2_font_helvR08_tr);
+  drawCenteredF("Your skill, alchemist?", 32);
+  drawChoiceLine(kSkillLabels[s_skillIdx]);
+  oled.sendBuffer();
+}
+
 static void renderStory(uint32_t now) {
+  if (s_skillSel) { renderSkillSelect(); return; }
   if (s_storyPause) { renderStoryPause(now); return; }
   oled.clearBuffer();
   const StoryNode& n = s_story[s_node];

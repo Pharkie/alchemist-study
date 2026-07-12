@@ -85,6 +85,9 @@ SECTIONS = [
     ("Story — idle pause", [
         (48, "15 s idle — Quest on / Quit"),
     ]),
+    ("Story — the opening question", [
+        (49, "Skill chosen at every quest start"),
+    ]),
 ]
 
 

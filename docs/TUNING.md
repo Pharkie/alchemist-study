@@ -40,7 +40,8 @@ the alignment model below; act 3 follows the full bar with the ritual.
 ## Act 2 — "align the essences" (two bottles)
 
 The knob shifts your wave's phase; the target wave drifts on a random heading.
-Inside the tolerance band the bar fills; outside it drains. Per Difficulty level:
+Inside the tolerance band the bar fills; outside it drains. Per skill level
+(Apprentice/Graduate/Professor, chosen at each quest start):
 
 | Constant | Easy / Med / Hard | Effect |
 |---|---|---|
@@ -104,9 +105,11 @@ Runtime settings live in the on-device **Settings** menu (press the knob on the
 idle screen; turn to move, press to edit a value, turn to change, press to
 confirm — a long-press cancels the edit and reverts the value): **Realm**,
 **Volume** (0–5, 0 = mute; loudness = LEDC duty via `kVolDuty`), **Brightness**
-(1–5), **Difficulty** (Easy/Medium/Hard), **Sleep**
-(screen-blank timeout), **Hardware Test**, **Firmware**, **Exit**. Realm, Volume,
-Brightness, Difficulty and Sleep persist to NVS (written on confirm, not per
+(1–5), **Sleep**
+(screen-blank timeout), **Hardware Test**, **Firmware**, **Exit**. Difficulty
+moved out of the menu: every quest opens with "Your skill, alchemist?"
+(Apprentice/Graduate/Professor -> `g_stirLevelIdx` 0/1/2, persisted). Realm, Volume,
+Brightness and Sleep persist to NVS (written on confirm, not per
 step). The menu is a data table (`kMenu` in `main.cpp`) — add an item by
 appending one row (`{label, kind, get, set, persist, …}`); kinds are choice /
 range / info / action.

@@ -634,6 +634,14 @@ def ritual_miss(s):
     s.draw_centered("listen again...", 56)
 
 
+def skill_select(s, idx=1):
+    s.draw_hline(44, 12, 40)
+    diamond(s, 40, 12); diamond(s, 88, 12)
+    s.set_font("helvR08")
+    s.draw_centered("Your skill, alchemist?", 32)
+    choice_line(s, ["Apprentice", "Graduate", "Professor"][idx])
+
+
 def story_pause(s, idx=0):
     s.draw_hline(44, 12, 40)
     diamond(s, 40, 12); diamond(s, 88, 12)
@@ -722,6 +730,7 @@ def build():
     shot(lambda s: ritual_show(s, 4, 4, 0, blind=True))
     shot(lambda s: ritual_good(s, now, done=True))
     shot(lambda s: story_pause(s, 0))
+    shot(lambda s: skill_select(s, 1))
     return shots
 
 
