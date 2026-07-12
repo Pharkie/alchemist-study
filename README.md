@@ -1,112 +1,136 @@
-# Alchemist Study
+# The Alchemist's Study
 
-Firmware for an **ESP32-C3 Super Mini** — the brain of a 3D-printed alchemist's
-study. Magnetic potion bottles drop into fixed homes; **reed switches** sense
-which are present, and an **OLED** names the potion you've brewed — across **seven
-RPG universes**. A rotary encoder is the "stir" control and a passive buzzer
-scores the brewing.
+**Brew potions with real bottles. No screen-tapping — magnets, a brass-feel
+knob, and a tiny glowing study on your shelf.**
 
-Built with PlatformIO + Arduino (arduino-esp32 **3.x** via the pioarduino platform).
-Runs fully offline — no WiFi, no accounts, no configuration.
+<!-- GIF: hero demo — seat bottles, stir, reveal. ~10s loop.
+<p align="center"><img src="docs/assets/alchemist-demo.gif" alt="Brewing a potion" width="70%"></p>
+-->
+*(demo GIF coming soon)*
+
+A 3D-printed alchemist's study with three potion bottles that really *do*
+something: seat them in their homes and hidden reed switches sense which are
+present; turn the stirring knob and a vortex swirls on the little OLED; and
+the potion you brewed is revealed by name — drawn from **seven RPG realms**
+(Skyrim, Baldur's Gate 3, The Witcher 3, World of Warcraft, Zelda, Minecraft,
+Ultima VII). A passive buzzer scores everything from the stir-trill to the
+reveal jingle.
+
+Runs fully offline. No app, no account, no WiFi setup — power it and brew.
+
+### Reasons to love it
+
+- **Physical play** — real bottles with magnets in their bases are the
+  controller; one, two or all three change what you brew
+- **Three mini-games, rising ceremony** — one bottle is a classic stir; two
+  becomes *align the essences* (steer your wave into phase with a drifting
+  one, guided by ear); all three earns the *Grand Brew* — a Simon-style
+  incantation you answer with turns and presses, learned by sound
+- **A story mode** — a three-evening Skyrim adventure with choices, an honest
+  3D-rendered d20, a battle that teaches you to brew under pressure, and a
+  poisoning plot to unravel. Every playthrough opens by asking your skill:
+  *Apprentice, Graduate or Professor?*
+- **Seven realms** — each with three in-universe ingredients and seven potions
+- **Shelf-friendly** — screen sleeps on a timer, volume 0–5 (0 = silent),
+  everything remembered across power-off
 
 ## How it plays
 
-1. **Place ingredients** — seat 1–3 bottles; the screen features the ingredient name(s).
-2. **Stir** — turn the knob. A power bar fills (with diminishing returns toward the
-   top), a vortex swirls, and a trill rises in pitch. Pause and it drains gently.
-3. **Brew** — once the bar is full, press the knob: one of three random full-screen
-   animations reveals the potion, with a success jingle.
-4. **Settings** — press on the idle screen: **Realm**, **Mute**, **Brightness**,
-   **Stir Level** (Easy/Medium/Hard), **Sleep** (screen-blank timeout), **Hardware
-   Test**, **Firmware**. Turn to move, press to edit a value, turn to change, press
-   to confirm. Settings persist (NVS).
+1. **Place ingredients** — seat 1–3 bottles; the screen names them as they stack
+2. **Stir** — turn the knob; each bottle count is its own mini-game
+3. **Brew** — a full bar (and, for the master potion, a completed incantation)
+   reveals your potion with a full-screen animation
+4. **Story Mode** — pick it from the home carousel and play the adventure;
+   15 s idle offers "Quest on / Quit" so you can always leave cleanly
+5. **Settings** — realm, volume, brightness, screen sleep, and a built-in
+   hardware test
 
-Three bottles give seven combinations (3 singles + 3 pairs + 1 triple) → seven
-potions per realm.
+Three bottles give seven combinations (3 singles + 3 pairs + 1 triple) —
+seven potions per realm, forty-nine names to discover.
 
-## Realms
+## What you need
+
+Rough cost is pocket-money territory — every electronic part is a common
+hobbyist module.
+
+| Part | Qty | Notes | AliExpress | Amazon |
+|---|---|---|---|---|
+| ESP32-C3 Super Mini | 1 | The brain; native USB-C | *link tbc* | *link tbc* |
+| 0.96" SSD1306 OLED, 128×64, I²C | 1 | White pixels look best | *link tbc* | *link tbc* |
+| KY-040 rotary encoder module | 1 | With push-switch and knob | *link tbc* | *link tbc* |
+| Reed switch (normally open) | 3 | Glass, ~14 mm | *link tbc* | *link tbc* |
+| Passive piezo buzzer | 1 | Must be **passive** — active ones can't play tunes | *link tbc* | *link tbc* |
+| Neodymium disc magnets | 3 | ~6×3 mm, one per bottle base | *link tbc* | *link tbc* |
+| Hook-up wire / Dupont jumpers | — | | *link tbc* | *link tbc* |
+| USB-C cable + 5 V supply | 1 | Any phone charger | | |
+| 3D-printed model | 1 | Print files: *coming soon* | | |
+
+## Build it
+
+The full guide — wiring diagram, printing, assembly, flashing — lives in
+**[docs/ASSEMBLY.md](docs/ASSEMBLY.md)**.
+
+The short version: print the study, push the reed switches into their slots
+under the bottle homes, glue a magnet into each bottle base, wire the modules
+to the ESP32-C3 per the diagram, and flash the firmware with one command.
+
+## Flash the firmware
+
+With [PlatformIO](https://platformio.org/) (Core ≥ 6.1.19) installed:
+
+```sh
+pio run -e c3-prod -t upload    # build + flash over USB-C
+```
+
+That's it — the study boots with a welcome chime. If something doesn't
+respond, flash the built-in wiring doctor instead
+(`pio run -e c3-hwcheck -t upload`) and follow
+[docs/HARDWARE_TEST.md](docs/HARDWARE_TEST.md).
+
+## The realms
 
 **Skyrim · Baldur's Gate 3 · The Witcher 3 · World of Warcraft · Zelda ·
-Minecraft · Ultima VII** — each with three in-universe ingredients and seven
-potions. Full tables in [CLAUDE.md](CLAUDE.md).
+Minecraft · Ultima VII** — three ingredients and seven potions each, all
+period-correct to their games. Full tables in [CLAUDE.md](CLAUDE.md).
 
-## Hardware
+## For tinkerers
 
-- **Board:** ESP32-C3 Super Mini (native USB-CDC serial).
-- **Display:** SSD1306 128×64 OLED (I²C).
-- **Input:** 3× reed switch, rotary encoder with push button.
-- **Audio:** passive piezo buzzer (a *passive* one — active buzzers can't play the pitched audio).
+Built with PlatformIO + Arduino (arduino-esp32 **3.x** via the pioarduino
+platform, pinned). The interesting bits:
 
-| Function | GPIO | Notes |
-|---|---|---|
-| Reed slot 1 / 2 / 3 | 3 / 4 / 10 | `INPUT_PULLUP`; magnet pulls LOW |
-| OLED SDA / SCL | 5 / 6 | I²C @ 100 kHz |
-| Buzzer | 1 | `tone()` (needs core 3.x) |
-| Encoder A / B / SW | 0 / 7 / 20 | SW `INPUT_PULLUP` |
+- Single-file state machine with strict timing conventions
+  ([docs/ARCHITECTURE.md](docs/ARCHITECTURE.md))
+- Data-driven story engine — an adventure is a table of nodes; new realms
+  bring their own scripts ([CLAUDE.md](CLAUDE.md))
+- Feel tunables documented with the maths ([docs/TUNING.md](docs/TUNING.md)),
+  mini-game design notes ([docs/MINIGAMES.md](docs/MINIGAMES.md))
+- **Build gates**: story text that would overflow the screen, a broken story
+  graph, doc/tuning drift, or a stale screen-preview twin *fails the build*
+  (`tools/check_story_text.py`, `tools/check_invariants.py`)
+- An off-device screen simulator renders every UI screen to PNG for review
+  (`tools/screens_preview.py`)
 
-The encoder is decoded with a GPIO-interrupt routine in firmware — the ESP32-C3
-has no PCNT peripheral, so the usual `ESP32Encoder` library can't be used. See
-[CLAUDE.md](CLAUDE.md) for the full pin map and the platform rationale.
-
-## Build & flash
-
-Requires **PlatformIO Core ≥ 6.1.19** (the pinned pioarduino platform needs it).
-
-```sh
-pio run                       # build (default env: c3-prod)
-pio run -e c3-dev -t upload   # flash dev build (verbose logs)
-pio device monitor -b 115200  # serial monitor over USB-CDC
-```
-
-| Env | Builds | Use |
-|---|---|---|
-| `c3-prod` | `main.cpp` (optimised) | release build |
-| `c3-dev` | `main.cpp` (verbose, exception decoder) | day-to-day flashing |
-| `c3-hwcheck` | `hwcheck.cpp` | wiring / component diagnostics |
-
-The real firmware **self-checks on boot**: a rising chime, a pin-map report, and
-if the OLED is missing it runs headless (error beep + serial warning) rather than
-failing silently.
-
-## Hardware check
-
-A standalone wiring diagnostic — beeps the buzzer, scans for the OLED, and shows a
-live ON/off status screen for every input while logging both edges to serial:
-
-```sh
-pio run -e c3-hwcheck -t upload
-pio device monitor -b 115200
-```
-
-Full guide + troubleshooting: **[docs/HARDWARE_TEST.md](docs/HARDWARE_TEST.md)**.
-The same diagnostic is also reachable in-firmware via **Settings → Hardware Test**.
-
-## Repo layout
-
-| Path | Purpose |
+| Env | Purpose |
 |---|---|
-| `src/main.cpp` | The firmware: state machine, realms, stir/brew, menu, animations |
-| `src/pins.h`, `src/quadrature.h` | Shared pin map + encoder decoder (used by both programs) |
-| `src/hwcheck.cpp` | Standalone hardware diagnostic (`c3-hwcheck`) |
-| `platformio.ini` | Build environments |
-| `CLAUDE.md` | Full spec: pin map, platform rationale, all realm tables |
-| `docs/CIRCUIT.md` | Power, grounding & wiring diagram (incl. the LED-coil domain) |
-| `docs/ARCHITECTURE.md` | State-machine conventions (transitions, timing, inputs) |
-| `docs/HARDWARE_TEST.md` | Running the hardware checker + troubleshooting |
-| `docs/TUNING.md` | Tunable feel constants (stir curve, audio, timing) |
-| `BACKLOG.md` | Phased build plan |
+| `c3-prod` | optimised release build (default) |
+| `c3-dev` | verbose logs + bench shortcuts (fake bottles from the Place panel) |
+| `c3-hwcheck` | standalone wiring diagnostic |
 
-## Versioning
+`FW_VERSION` in `src/main.cpp` tracks the
+[GitHub releases](https://github.com/Pharkie/alchemist-study/releases).
+Connectivity (WiFi provisioning, OTA, Home Assistant) is a planned later
+stage — see [BACKLOG.md](BACKLOG.md).
 
-`FW_VERSION` in `src/main.cpp` tracks the git tag / GitHub release. Current: **v0.1**.
+## LLM Generated, Human Reviewed
 
-## Roadmap
-
-1. **Bench firmware (offline)** — the potion experience, standalone. ✅ (v0.1)
-2. **Connectivity (later)** — runtime WiFi provisioning, OTA updates, a status
-   page, and Home Assistant integration (e.g. announce a brew as an event). The
-   C3's radio stays available; it's added once the magic works on the bench. See
-   [BACKLOG.md](BACKLOG.md).
+This code was generated with [Claude Code](https://claude.com/claude-code)
+(Anthropic), primarily on Claude Opus 4.8 and Claude Fable 5. Development was
+overseen by the human author with attention to reliability and security.
+Architectural decisions, configuration choices, and development sessions were
+closely planned, directed, and verified by the human author throughout —
+including hardware bring-up and on-device testing beyond the LLM. Still, the
+code has had limited manual review; please make your own checks and use it at
+your own risk.
 
 ## License
 
@@ -115,13 +139,3 @@ Free for noncommercial use under the **PolyForm Noncommercial License 1.0.0**.
 [LICENSE](LICENSE) for full terms.
 
 © 2026 Adam Knowles. All rights reserved.
-
-## LLM Generated, Human Reviewed
-
-This code was generated with [Claude Code](https://claude.com/claude-code)
-(Anthropic), primarily on Claude Opus 4.8. Development was overseen by the human
-author with attention to reliability and security. Architectural decisions,
-configuration choices, and development sessions were closely planned, directed,
-and verified by the human author throughout — including hardware bring-up and
-on-device testing beyond the LLM. Still, the code has had limited manual review;
-please make your own checks and use it at your own risk.

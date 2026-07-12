@@ -105,6 +105,33 @@ The brewing mechanic now scales with the **act** = bottles seated
 
 ---
 
+## Docs & release polish (user-facing) — Adam to fill / decide
+
+The README + [docs/ASSEMBLY.md](docs/ASSEMBLY.md) are drafted with
+placeholders. Outstanding:
+
+- [ ] **BOM links** — AliExpress + Amazon links for: ESP32-C3 Super Mini,
+      SSD1306 0.96" OLED, KY-040 encoder, reed switches, passive buzzer,
+      6x3 mm magnets, jumper wire (README "What you need" table)
+- [ ] **Hero GIF** — ~10 s loop (seat bottles → stir → reveal) for the README
+      slot (`docs/assets/alchemist-demo.gif`; commented-out img tag ready)
+- [ ] **Fritzing diagram** — `docs/assets/wiring-fritzing.png` for
+      ASSEMBLY.md step 4 (commented-out img tag ready; the wiring table is
+      build-verified against pins.h in the meantime)
+- [ ] **3D model hosting** — decide where print files live: `3d_model/` is
+      ~240 MB and gitignored (too big for plain git). Options: Printables /
+      MakerWorld / a curated STL-only subset in-repo / Git LFS. Then update
+      the "Print files: coming soon" notes in README + ASSEMBLY
+- [ ] **Print settings** — confirm layers/walls/supports once final files
+      are chosen (ASSEMBLY step 1 placeholder)
+- [ ] **Mounting hardware** — confirm screw sizes / glue points for OLED,
+      encoder, C3 board (ASSEMBLY step 5 placeholder)
+- [ ] **Photos** — a real build photo or two for README/ASSEMBLY
+- [ ] Consider attaching pre-built `firmware.bin` to GitHub releases so
+      non-PlatformIO users can flash with a web flasher
+
+---
+
 ## Stage 2 — Connectivity (deferred, deliberate)
 
 Only start after the bench firmware works end-to-end on hardware. The radio is the

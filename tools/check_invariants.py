@@ -11,8 +11,8 @@ TUNING.md / code comments) and therefore rotted silently:
   stir     kStirCap > kStirDecay per level ("or it's unfillable"),
            align fill/drain/tolerance all positive
   pins     src/pins.h vs the GPIO numbers quoted in CLAUDE.md,
-           docs/CIRCUIT.md and docs/HARDWARE_TEST.md (four copies that
-           were updated by hand this week — never again)
+           docs/CIRCUIT.md, docs/HARDWARE_TEST.md and docs/ASSEMBLY.md
+           (copies that were updated by hand this week — never again)
   twins    the d20 face-numbering and icosahedron face tables duplicated
            in tools/screens_preview.py match main.cpp exactly
   strings  every multi-word display string the sim twin draws still
@@ -197,6 +197,20 @@ def check_pins(errors, root):
         (r'GPIO(\d+)"\|\s*RD3', "PIN_REED_SLOT3", "reed 3"),
     ]:
         expect("docs/CIRCUIT.md", circuit, pat, pin, what)
+
+    asm = open(os.path.join(root, "docs", "ASSEMBLY.md")).read()
+    for pat, pin, what in [
+        (r"Reed 1 / slot 1[^|]*\|\s*(\d+)", "PIN_REED_SLOT1", "reed 1"),
+        (r"Reed 2 / slot 2[^|]*\|\s*(\d+)", "PIN_REED_SLOT2", "reed 2"),
+        (r"Reed 3 / slot 3[^|]*\|\s*(\d+)", "PIN_REED_SLOT3", "reed 3"),
+        (r"OLED SDA \|\s*(\d+)", "PIN_OLED_SDA", "OLED SDA"),
+        (r"OLED SCL \|\s*(\d+)", "PIN_OLED_SCL", "OLED SCL"),
+        (r"Buzzer[^|]*\|\s*(\d+)", "PIN_BUZZER", "buzzer"),
+        (r"Encoder CLK \|\s*(\d+)", "PIN_ENC_A", "encoder CLK"),
+        (r"Encoder DT \|\s*(\d+)", "PIN_ENC_B", "encoder DT"),
+        (r"Encoder SW \|\s*(\d+)", "PIN_ENC_SW", "encoder SW"),
+    ]:
+        expect("docs/ASSEMBLY.md", asm, pat, pin, what)
 
     hwt = open(os.path.join(root, "docs", "HARDWARE_TEST.md")).read()
     for pat, pin, what in [
