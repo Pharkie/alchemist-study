@@ -458,8 +458,8 @@ static const StoryNode kStorySkyrim[] = {
   /*37 poured */ { N_CARD, "The Counter-Brew", // act 1's flower saves the realm
                   "The flower falls in. The cauldron clears... Peryite SCREAMS.",
                   nullptr, nullptr, 38, 0, 0, 0, 0, 0, 0, nullptr, nullptr },
-  /*38 saved  */ { N_CARD, "Realm Saved",
-                  "Skyrim drinks clean. The Jarl names you Alchemist of Whiterun.",
+  /*38 saved  */ { N_CARD, "The Rivers Run Clear",
+                  "Skyrim drinks clean. Whiterun hails you.",
                   nullptr, nullptr, 39, 0, 0, 99, 0, 0, 0, nullptr, nullptr },
   /*39 jarl   */ { N_SPEAK, "Jarl Balgruuf",   // the act 1 line, paid off
                   "You mended more than flesh. Skyrim owes you, alchemist.",

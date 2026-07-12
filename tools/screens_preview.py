@@ -704,8 +704,8 @@ def build():
     shot(lambda s: brew(s, [], "'what quenches a plague?'", title="Brew: the counter"))
     shot(lambda s: story_card(s, "Peryite Prevails",
                               "Skyrim's rivers run grey. The Jarl's words linger. The cauldron waits.", 100))
-    shot(lambda s: story_card(s, "Realm Saved",
-                              "Skyrim drinks clean. The Jarl names you Alchemist of Whiterun.", 100,
+    shot(lambda s: story_card(s, "The Rivers Run Clear",
+                              "Skyrim drinks clean. Whiterun hails you.", 100,
                               show_hp=True, php=30))
     shot(lambda s: speak(s, "Jarl Balgruuf",
                          "You mended more than flesh. Skyrim owes you, alchemist.", now))
